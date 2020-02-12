@@ -91,9 +91,10 @@ class Trainer(abc.ABC):
             train_loss.append(torch.tensor(train_result.losses).mean().item())
             train_acc.append(train_result.accuracy)
 
-            test_result = self.test_epoch(dl_test, **kw)
-            test_loss.append(torch.tensor(test_result.losses).mean().item())
-            test_acc.append(test_result.accuracy)
+            # test_result = self.test_epoch(dl_test, **kw)
+            # test_loss.append(torch.tensor(test_result.losses).mean().item())
+            # test_acc.append(test_result.accuracy)
+            test_result = None
 
             curr_loss = test_loss[-1]
             best_loss = min(test_loss[:-1]) if len(test_loss) >= 2 else 1e3
