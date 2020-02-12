@@ -91,23 +91,23 @@ class Trainer(abc.ABC):
             train_loss.append(torch.tensor(train_result.losses).mean().item())
             train_acc.append(train_result.accuracy)
 
+            test_result = None
             # test_result = self.test_epoch(dl_test, **kw)
             # test_loss.append(torch.tensor(test_result.losses).mean().item())
             # test_acc.append(test_result.accuracy)
-            test_result = None
-
-            curr_loss = test_loss[-1]
-            best_loss = min(test_loss[:-1]) if len(test_loss) >= 2 else 1e3
-            if early_stopping and (curr_loss > best_loss - 1e-4):
-                epochs_without_improvement += 1
-                if epochs_without_improvement >= early_stopping:
-                    break
-            else:
-                epochs_without_improvement = 0
-
-            if checkpoints is not None and test_acc[-1] > best_acc:
-                save_checkpoint = True
-                best_acc = test_acc[-1]
+            #
+            # curr_loss = test_loss[-1]
+            # best_loss = min(test_loss[:-1]) if len(test_loss) >= 2 else 1e3
+            # if early_stopping and (curr_loss > best_loss - 1e-4):
+            #     epochs_without_improvement += 1
+            #     if epochs_without_improvement >= early_stopping:
+            #         break
+            # else:
+            #     epochs_without_improvement = 0
+            #
+            # if checkpoints is not None and test_acc[-1] > best_acc:
+            #     save_checkpoint = True
+            #     best_acc = test_acc[-1]
             # ========================
 
             # Save model checkpoint if requested
