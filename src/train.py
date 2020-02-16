@@ -223,9 +223,14 @@ class Trainer(abc.ABC):
 
 
 class PremiseGeneratorTrainer(Trainer):
-    def __init__(self, model, tokenizer, loss_fn, optimizer, device=None):
+    def __init__(self, model, tokenizer, loss_fn, optimizer, evaluator, max_len=30, possible_labels=None, device=None):
         super().__init__(model, loss_fn, optimizer, device)
+        self.evaluator = evaluator
+        if possible_labels is None:
+            possible_labels = ['neutral', 'entailment']
         self.tokenizer = tokenizer
+        self.labels = possible_labels
+        self.max_len = max_len
 
     def train_epoch(self, dl_train: DataLoader, **kw):
         return super().train_epoch(dl_train, **kw)
@@ -234,25 +239,29 @@ class PremiseGeneratorTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
+        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids, \
+            decoder_labels = batch
         x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
         encoder_token_type_ids = encoder_token_type_ids.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
         decoder_token_type_ids = decoder_token_type_ids.to(self.device)
+        decoder_labels = decoder_labels.to(self.device)
+
+        decoder_input = y
 
         model_kwargs = {
             "encoder_token_type_ids": encoder_token_type_ids,
             "encoder_attention_mask": encoder_attention_mask,
             "decoder_token_type_ids": decoder_attention_mask,
             "decoder_attention_mask": decoder_token_type_ids,
-            "decoder_lm_labels": y
+            "decoder_lm_labels": decoder_labels
         }
 
         self.optimizer.zero_grad()
-
-        outputs = self.model(x, y, train=True, **model_kwargs)
+        with torch.set_grad_enabled(True):
+            outputs = self.model(x, decoder_input, train=True, **model_kwargs)
 
         loss = outputs[0]
 
@@ -262,24 +271,56 @@ class PremiseGeneratorTrainer(Trainer):
         return BatchResult(loss.item(), 0)
 
     def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
+        print('\n')
+        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids, \
+            decoder_labels = batch
         x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
         encoder_token_type_ids = encoder_token_type_ids.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
         decoder_token_type_ids = decoder_token_type_ids.to(self.device)
+        decoder_labels = decoder_labels.to(self.device)
 
         model_kwargs = {
             "encoder_token_type_ids": encoder_token_type_ids,
             "encoder_attention_mask": encoder_attention_mask,
             "decoder_token_type_ids": decoder_attention_mask,
             "decoder_attention_mask": decoder_token_type_ids,
-            "decoder_lm_labels": y
+            "decoder_lm_labels": decoder_labels
         }
 
-        with torch.no_grad():
-            outputs = self.model(x, y)
-            predictions = outputs[0]
+        best_res = (0, None)
+        x_text = self.tokenizer.decode(x.squeeze(0))
+        x_text_no_pad = x_text.replace('[PAD]', '')
 
-        return BatchResult(predictions.item(), 0)
+        y_text = self.tokenizer.decode(y.squeeze(0))
+        y_text_no_pad = y_text.replace('[PAD]', '')
+        decoded_output = y_text_no_pad
+
+        for label in self.labels:
+            generated_text = "[CLS]"
+
+            curr_text = y_text_no_pad.split()
+            curr_text[1] = label
+            curr_x = ' '.join(curr_text)
+
+            curr_x = torch.tensor(self.tokenizer.encode(curr_x, max_length=self.max_len, pad_to_max_length=True)).\
+                to(self.device)
+            while len(generated_text.split()) <= 30:
+                decoder_input_ids = self.tokenizer.encode(generated_text)
+                decoder_input_tensor = torch.tensor([decoder_input_ids]).to(self.device)
+                with torch.no_grad():
+                    outputs = self.model(curr_x.unsqueeze(0), decoder_input_tensor)
+                    predictions = outputs[0]
+                predicted_index = torch.argmax(predictions[0, -1]).item()
+                predicted_token = self.tokenizer.convert_ids_to_tokens([predicted_index])[0]
+
+                generated_text += " " + predicted_token
+                scores = self.evaluator.get_scores(generated_text, decoded_output)
+
+            print(generated_text)
+
+
+
+        return BatchResult(0, 0)

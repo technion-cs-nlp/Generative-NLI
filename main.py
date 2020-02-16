@@ -14,6 +14,9 @@ from src.models import PremiseGenerator
 from src.train import PremiseGeneratorTrainer
 from src.utils import FitResult, get_max_len
 
+import rouge
+import nltk
+
 
 # model = PreTrainedEncoderDecoder.from_pretrained('bert-base-cased', 'gpt2')
 # # model = Model2Model.from_pretrained('bert-base-cased')
@@ -98,6 +101,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     max_len = get_max_len(test_lines + train_lines + val_lines, '|||')
 
+    all_labels_text = list(set(test_labels + train_labels))
+
+    all_labels = ['['+l.upper().replace('\n', '')+']' for l in all_labels_text]
+
+    tokenizer.add_tokens(all_labels)
+
     ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, max_len=max_len)
     ds_train = PremiseGenerationDataset(train_lines, train_labels, tokenizer, max_len=max_len)
 
@@ -107,12 +116,29 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = PremiseGenerator(model_name)
+    model.model.encoder.resize_token_embeddings(len(tokenizer))
+    model.model.decoder.resize_token_embeddings(len(tokenizer))
 
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False)
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test if bs_test else bs_train // 2, shuffle=False)
     # print(model)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, device)
+
+    nltk.download('punkt')
+    rouge_evaluator = rouge.Rouge(
+        metrics=["rouge-n", "rouge-l"],
+        max_n=2,
+        limit_length=True,
+        length_limit=3,
+        length_limit_type="words",
+        apply_avg=True,
+        apply_best=False,
+        alpha=0.5,  # Default F1_score
+        weight_factor=1.2,
+        stemming=True,
+    )
+
+    trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, rouge_evaluator, max_len, all_labels, device)
     fit_res = trainer.fit(dl_train, dl_test, num_epochs=epochs, early_stopping=early_stopping)
     save_experiment(run_name, out_dir, cfg, fit_res)
 

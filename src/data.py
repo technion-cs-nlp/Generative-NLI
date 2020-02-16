@@ -19,18 +19,25 @@ class PremiseGenerationDataset(Dataset):
 
         inp = split[0]
         tgt = split[1]
+        #
+        # target_input = "<START> " + tgt[:-1]
 
-        sent = '<' + self.labels[index][:-1] + '> ' + inp
+        sent = '[' + self.labels[index][:-1].upper().replace(' ', '') + '] ' + inp
 
         input_dict = self.tokenizer.encode_plus(sent,
                                                 max_length=self.max_len,
                                                 pad_to_max_length=True)
-        target_dict = self.tokenizer.encode_plus(tgt,
+        target_dict = self.tokenizer.encode_plus(tgt[:-1],
                                                  max_length=self.max_len,
                                                  pad_to_max_length=True)
+        y_output = self.tokenizer.encode(tgt[1:],
+                                         max_length=self.max_len,
+                                         pad_to_max_length=True)
 
         res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
               [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
+
+        res += [torch.tensor(y_output)]
 
         return tuple(res)
 
