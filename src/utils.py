@@ -1,4 +1,5 @@
 from typing import NamedTuple, List
+import torch
 
 
 class BatchResult(NamedTuple):
@@ -42,3 +43,10 @@ def get_max_len(l, sep, tokenizer):
         max_len = max([max_len, len(tokenizer.encode(split[0])), len(tokenizer.encode(split[1])) + 1])
 
     return max_len
+
+
+# Function to calculate the accuracy of our predictions vs labels
+def flat_accuracy(preds, labels):
+    pred_flat = preds.flatten()
+    labels_flat = labels.flatten()
+    return (torch.sum(pred_flat == labels_flat) / labels_flat.size(0)).item()

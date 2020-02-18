@@ -13,43 +13,7 @@ from src.data import PremiseGenerationDataset
 from src.models import PremiseGenerator, get_model
 from src.train import PremiseGeneratorTrainer
 from src.utils import FitResult, get_max_len
-
-import rouge
-import nltk
-
-
-# model = PreTrainedEncoderDecoder.from_pretrained('bert-base-cased', 'gpt2')
-# # model = Model2Model.from_pretrained('bert-base-cased')
-#
-# tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
-# tokenizer_gpt2 = GPT2Tokenizer.from_pretrained('gpt2')
-#
-# sequence_a = "This is a short sequence."
-# sequence_b = "This is a rather long sequence. It is at least longer than the sequence A."
-#
-# encoded_sequence_a = tokenizer.encode(sequence_a)
-#
-# encoded_sequence_b = tokenizer.encode(sequence_b)
-#
-# sequence_a_dict = tokenizer.encode_plus(sequence_a, max_length=19, pad_to_max_length=True)
-# sequence_b_dict = tokenizer_gpt2.encode_plus(sequence_b, max_length=19, pad_to_max_length=True)
-#
-#
-# encoder_input = torch.tensor([sequence_a_dict['input_ids']])
-# decoder_input = sequence_b_dict['input_ids']
-#
-# model_kwargs = {
-#     "encoder_token_type_ids": torch.tensor([sequence_a_dict['token_type_ids']]),
-#     "encoder_attention_mask": torch.tensor([sequence_a_dict['attention_mask']]),
-#     "decoder_token_type_ids": torch.tensor([sequence_b_dict['token_type_ids']]),
-#     "decoder_attention_mask": torch.tensor([sequence_b_dict['attention_mask']]),
-#     "decoder_lm_labels": decoder_input
-# }
-#
-# # model.eval()
-#
-# x = model(encoder_input, decoder_input, **model_kwargs)
-# pass
+import math
 
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli',
@@ -99,19 +63,31 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     tokenizer = BertTokenizer.from_pretrained(model_name)
 
-    max_len = get_max_len(test_lines[:batches*bs_test] + train_lines[:batches*bs_train], '|||', tokenizer)
-    print(max_len)
+    max_len = get_max_len(test_lines[:batches*bs_test] + train_lines[:batches*bs_train] + val_lines[:batches*bs_test],
+                          '|||', tokenizer)
+    print(f'Longest Sequence is: {max_len} token_ids')
 
-    all_labels_text = list(set(test_labels[:batches*bs_test] + train_labels[:batches*bs_train]))
+    max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
+    max_len = int(max_len)
+
+    print(f'Setting max_len to: {max_len}')
+
+    all_labels_text = list(set(test_labels[:batches*bs_test] + train_labels[:batches*bs_train] + val_labels[:batches*bs_test]))
 
     all_labels = ['['+l.upper().replace('\n', '')+']' for l in all_labels_text]
 
     tokenizer.add_tokens(all_labels)
 
+    labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+
+    print(f'Labels IDs: {labels_ids}')
+
     ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, max_len=max_len)
+    ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, max_len=max_len)
     ds_train = PremiseGenerationDataset(train_lines, train_labels, tokenizer, max_len=max_len)
 
-    ds_test = Subset(ds_test, range(bs_test))
+    ds_test = Subset(ds_test, range(batches*bs_test))
+    ds_val = Subset(ds_val, range(batches*bs_test))
     ds_train = Subset(ds_train, range(batches*bs_train))
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -119,30 +95,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     model = get_model(tokenizer=tokenizer, model='encode-decode')
 
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False)
-    dl_test = torch.utils.data.DataLoader(ds_test, bs_test if bs_test else bs_train // 2, shuffle=False)
+    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
+    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
     # print(model)
     optimizer = AdamW(model.parameters(), lr=lr)
 
-    # scheduler = get_linear_schedule_with_warmup(optimizer,
-    #                                             num_warmup_steps=0,  # Default value in run_glue.py
-    #                                             num_training_steps=batches*bs_train*epochs)
-
-    # nltk.download('punkt')
-    # rouge_evaluator = rouge.Rouge(
-    #     metrics=["rouge-n", "rouge-l"],
-    #     max_n=2,
-    #     limit_length=True,
-    #     length_limit=3,
-    #     length_limit_type="words",
-    #     apply_avg=True,
-    #     apply_best=False,
-    #     alpha=0.5,  # Default F1_score
-    #     weight_factor=1.2,
-    #     stemming=True,
-    # )
-
-    trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, max_len, all_labels, device)
-    fit_res = trainer.fit(dl_train, dl_test, num_epochs=epochs, early_stopping=early_stopping)
+    trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, max_len, labels_ids, device)
+    fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping)
     save_experiment(run_name, out_dir, cfg, fit_res)
 
 
