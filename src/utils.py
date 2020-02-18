@@ -32,10 +32,13 @@ class FitResult(NamedTuple):
     test_acc: List[float]
 
 
-def get_max_len(l, sep):
+def get_max_len(l, sep, tokenizer):
     max_len = 0
+    it = 0
     for sent in l:
+        # print(it)
+        it += 1
         split = sent.split(sep)
-        max_len = max([max_len, len(split[0]), len(split[1])])
+        max_len = max([max_len, len(tokenizer.encode(split[0])), len(tokenizer.encode(split[1])) + 1])
 
     return max_len

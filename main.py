@@ -7,10 +7,10 @@ import sys
 import torch
 import torchvision
 from torch.utils.data import DataLoader, Subset
-from transformers import BertTokenizer
+from transformers import BertTokenizer, AdamW, get_linear_schedule_with_warmup
 
 from src.data import PremiseGenerationDataset
-from src.models import PremiseGenerator
+from src.models import PremiseGenerator, get_model
 from src.train import PremiseGeneratorTrainer
 from src.utils import FitResult, get_max_len
 
@@ -53,7 +53,7 @@ import nltk
 
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli',
-                   model_name='bert-base-cased', seed=None,
+                   model_name='bert-base-uncased', seed=None,
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3,
@@ -99,9 +99,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     tokenizer = BertTokenizer.from_pretrained(model_name)
 
-    max_len = get_max_len(test_lines + train_lines + val_lines, '|||')
+    max_len = get_max_len(test_lines[:batches*bs_test] + train_lines[:batches*bs_train], '|||', tokenizer)
+    print(max_len)
 
-    all_labels_text = list(set(test_labels + train_labels))
+    all_labels_text = list(set(test_labels[:batches*bs_test] + train_labels[:batches*bs_train]))
 
     all_labels = ['['+l.upper().replace('\n', '')+']' for l in all_labels_text]
 
@@ -110,35 +111,37 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, max_len=max_len)
     ds_train = PremiseGenerationDataset(train_lines, train_labels, tokenizer, max_len=max_len)
 
-    ds_test = Subset(ds_test, range(batches*bs_test))
+    ds_test = Subset(ds_test, range(bs_test))
     ds_train = Subset(ds_train, range(batches*bs_train))
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = PremiseGenerator(model_name)
-    model.model.encoder.resize_token_embeddings(len(tokenizer))
-    model.model.decoder.resize_token_embeddings(len(tokenizer))
+    model = get_model(tokenizer=tokenizer, model='encode-decode')
 
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False)
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test if bs_test else bs_train // 2, shuffle=False)
     # print(model)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = AdamW(model.parameters(), lr=lr)
 
-    nltk.download('punkt')
-    rouge_evaluator = rouge.Rouge(
-        metrics=["rouge-n", "rouge-l"],
-        max_n=2,
-        limit_length=True,
-        length_limit=3,
-        length_limit_type="words",
-        apply_avg=True,
-        apply_best=False,
-        alpha=0.5,  # Default F1_score
-        weight_factor=1.2,
-        stemming=True,
-    )
+    # scheduler = get_linear_schedule_with_warmup(optimizer,
+    #                                             num_warmup_steps=0,  # Default value in run_glue.py
+    #                                             num_training_steps=batches*bs_train*epochs)
 
-    trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, rouge_evaluator, max_len, all_labels, device)
+    # nltk.download('punkt')
+    # rouge_evaluator = rouge.Rouge(
+    #     metrics=["rouge-n", "rouge-l"],
+    #     max_n=2,
+    #     limit_length=True,
+    #     length_limit=3,
+    #     length_limit_type="words",
+    #     apply_avg=True,
+    #     apply_best=False,
+    #     alpha=0.5,  # Default F1_score
+    #     weight_factor=1.2,
+    #     stemming=True,
+    # )
+
+    trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, max_len, all_labels, device)
     fit_res = trainer.fit(dl_train, dl_test, num_epochs=epochs, early_stopping=early_stopping)
     save_experiment(run_name, out_dir, cfg, fit_res)
 
@@ -205,7 +208,7 @@ def parse_cli():
 
     # # Model
     sp_exp.add_argument('--model_name', type=str,
-                        help='Name of the huggingface model', default='bert-base-cased')
+                        help='Name of the huggingface model', default='bert-base-uncased')
     # sp_exp.add_argument('--filters-per-layer', '-K', type=int, nargs='+',
     #                     help='Number of filters per conv layer in a block',
     #                     metavar='K', required=True)
