@@ -20,9 +20,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    model_name='bert-base-uncased', seed=None,
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
-                   early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3,
+                   early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0,
                    **kw):
     """
+    :param max_len:
     :param model_name:
     :param data_dir_prefix:
     :param run_name:
@@ -62,10 +63,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         val_lines = val_lines_file.readlines()
 
     tokenizer = BertTokenizer.from_pretrained(model_name)
-
-    max_len = get_max_len(test_lines[:batches*bs_test] + train_lines[:batches*bs_train] + val_lines[:batches*bs_test],
-                          '|||', tokenizer)
-    print(f'Longest Sequence is: {max_len} token_ids')
+    if max_len == 0:
+        max_len = get_max_len(test_lines[:batches*bs_test] + train_lines[:batches*bs_train] + val_lines[:batches*bs_test],
+                              '|||', tokenizer)
+        print(f'Longest Sequence is: {max_len} token_ids')
 
     max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
     max_len = int(max_len)
@@ -160,13 +161,15 @@ def parse_cli():
                              'accuracy improves', default=None)
     sp_exp.add_argument('--lr', type=float,
                         help='Learning rate', default=0.001)
-    sp_exp.add_argument('--reg', type=int,
+    sp_exp.add_argument('--reg', type=float,
                         help='L2 regularization', default=1e-3)
-    sp_exp.add_argument('--data_dir_prefix', type=str,
+    sp_exp.add_argument('--data-dir-prefix', type=str,
                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
+    sp_exp.add_argument('--max-len', type=int,
+                        help='Length of longest sequence (or bigger), 0 if you don\'t know', default=0)
 
     # # Model
-    sp_exp.add_argument('--model_name', type=str,
+    sp_exp.add_argument('--model-name', type=str,
                         help='Name of the huggingface model', default='bert-base-uncased')
     # sp_exp.add_argument('--filters-per-layer', '-K', type=int, nargs='+',
     #                     help='Number of filters per conv layer in a block',

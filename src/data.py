@@ -26,7 +26,6 @@ class PremiseGenerationDataset(Dataset):
                                          max_length=self.max_len,
                                          pad_to_max_length=True)
 
-
         split = self.lines[index].split(self.sep)
 
         inp = split[0]

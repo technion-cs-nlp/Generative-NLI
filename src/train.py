@@ -5,11 +5,12 @@ import tqdm
 import torch
 
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from typing import Callable, Any
 from pathlib import Path
-from src.utils import BatchResult, EpochResult, FitResult, flat_accuracy
+from src.utils import BatchResult, EpochResult, FitResult
 
-import copy
+writer = SummaryWriter()
 
 
 class Trainer(abc.ABC):
@@ -93,23 +94,28 @@ class Trainer(abc.ABC):
             train_loss.append(torch.tensor(train_result.losses).mean().item())
             train_acc.append(train_result.accuracy)
 
-            test_result = None
+            writer.add_scalar('Loss/train', train_loss[-1], epoch)
+            writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
+
             test_result = self.test_epoch(dl_test, **kw)
-            # test_loss.append(torch.tensor(test_result.losses).mean().item())
-            # test_acc.append(test_result.accuracy)
-            #
-            # curr_loss = test_loss[-1]
-            # best_loss = min(test_loss[:-1]) if len(test_loss) >= 2 else 1e3
-            # if early_stopping and (curr_loss > best_loss - 1e-4):
-            #     epochs_without_improvement += 1
-            #     if epochs_without_improvement >= early_stopping:
-            #         break
-            # else:
-            #     epochs_without_improvement = 0
-            #
-            # if checkpoints is not None and test_acc[-1] > best_acc:
-            #     save_checkpoint = True
-            #     best_acc = test_acc[-1]
+            test_loss.append(torch.tensor(test_result.losses).mean().item())
+            test_acc.append(test_result.accuracy)
+
+            writer.add_scalar('Loss/test', test_loss[-1], epoch)
+            writer.add_scalar('Accuracy/test', test_acc[-1], epoch)
+
+            curr_loss = test_loss[-1]
+            best_loss = min(test_loss[:-1]) if len(test_loss) >= 2 else 1e3
+            if early_stopping and (curr_loss > best_loss - 1e-4):
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= early_stopping:
+                    break
+            else:
+                epochs_without_improvement = 0
+
+            if checkpoints is not None and test_acc[-1] > best_acc:
+                save_checkpoint = True
+                best_acc = test_acc[-1]
             # ========================
 
             # Save model checkpoint if requested
@@ -258,8 +264,11 @@ class PremiseGeneratorTrainer(Trainer):
         }
 
         self.optimizer.zero_grad()
-        with torch.set_grad_enabled(True):
-            outputs = self.model(x, y, **model_kwargs)
+
+        outputs = self.model(x, y, **model_kwargs)
+        # encoder_hidden_states = outputs[2]
+        # model_kwargs['encoder_hidden_states'] = encoder_hidden_states
+        # outputs = self.model(x, y, **model_kwargs)
 
         loss = outputs[0]
 
@@ -287,23 +296,42 @@ class PremiseGeneratorTrainer(Trainer):
             "decoder_lm_labels": y
         }
 
-        best_res = (torch.tensor(1e9), None)
+        correct_labels = x[:, 1].clone()
+        total_loss = torch.zeros(1, dtype=float)
+        pred = []
 
-        correct_labels = copy.deepcopy(x[:, 1])
-        loss = None
+        for i in range(x.size(0)):
+            best_res = (torch.tensor(1e9), None)
+            model_kwargs = {
+                # "encoder_token_type_ids": encoder_token_type_ids,
+                "encoder_attention_mask": encoder_attention_mask[i].unsqueeze(0),
+                # "decoder_token_type_ids": decoder_token_type_ids,
+                "decoder_attention_mask": decoder_attention_mask[i].unsqueeze(0),
+                "decoder_lm_labels": y[i].unsqueeze(0)
+            }
+            for label_id in self.labels:
+                curr_x = x[i].clone().to(self.device)
+                curr_x = curr_x.unsqueeze(0)
+                curr_x[:, 1] = label_id
+                with torch.no_grad():
+                    outputs = self.model(curr_x, y[i].unsqueeze(0), **model_kwargs)
+                    # encoder_hidden_states = outputs[2]
+                    # model_kwargs['encoder_hidden_states'] = encoder_hidden_states
+                    # outputs = self.model(curr_x, y[i].unsqueeze(0), **model_kwargs)
+                    loss = outputs[0]
+                    # model_kwargs.pop('encoder_hidden_states')
 
-        for label_id in self.labels:
-            curr_x = copy.deepcopy(x).to(self.device)
-            curr_x[:, 1] = label_id
-            with torch.no_grad():
-                outputs = self.model(curr_x, y, **model_kwargs)
-                loss = outputs[0]
+                if loss < best_res[0]:
+                    best_res = (loss, label_id)
 
-            if loss < best_res[0]:
-                best_res = (loss, label_id)
+            total_loss += best_res[0]
+            pred.append(best_res[1])
 
-        pred = torch.tensor([best_res[1]])
-        num_correct = torch.sum(pred == correct_labels)
+        pred = torch.tensor(pred)
+        pred.to('cpu')
+        correct_labels = correct_labels.to('cpu')
+        # import pdb; pdb.set_trace()
+        num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
-        return BatchResult(loss.item(), num_correct.item()/len(batch))
+        return BatchResult(loss.item(), num_correct.item())
 
