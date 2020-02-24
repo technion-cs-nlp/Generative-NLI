@@ -15,16 +15,6 @@ class PremiseGenerationDataset(Dataset):
         self.size = len(self.lines)
 
     def __getitem__(self, index):
-        split = self.lines[index].split(self.sep)
-
-        inp = split[0]
-        tgt = split[1].replace('\n', '')
-        target_dict = self.tokenizer.encode_plus(tgt[:-1],
-                                                 max_length=self.max_len,
-                                                 pad_to_max_length=True)
-        y_output = self.tokenizer.encode(tgt[1:],
-                                         max_length=self.max_len,
-                                         pad_to_max_length=True)
 
         split = self.lines[index].split(self.sep)
 
@@ -42,6 +32,9 @@ class PremiseGenerationDataset(Dataset):
                                                  max_length=self.max_len,
                                                  pad_to_max_length=True)
 
+        # print(input_dict)
+        # print(target_dict)
+        # kjhkhkjh
         res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
               [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
 
