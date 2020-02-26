@@ -1,8 +1,6 @@
-import torch
 import torch.nn as nn
-import transformers
 from transformers import Model2Model, BertTokenizer, BertForMaskedLM, PreTrainedEncoderDecoder, BertModel, \
-    GPT2Tokenizer, GPT2LMHeadModel
+    GPT2LMHeadModel, AutoConfig
 
 
 class PremiseGeneratorHybrid(nn.Module):
@@ -31,7 +29,7 @@ class PremiseGeneratorHybrid(nn.Module):
         return decoder_outputs + encoder_outputs
 
 
-def get_model(model='masked', model_name='bert-base-uncased', tokenizer=None, v=2):
+def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, v=1):
     res_model = None
     if tokenizer is None:
         tokenizer = BertTokenizer.from_pretrained(model_name)
@@ -39,12 +37,9 @@ def get_model(model='masked', model_name='bert-base-uncased', tokenizer=None, v=
 
     if model == 'encode-decode':
         if v == 1:
-            res_model = PreTrainedEncoderDecoder(
-                BertModel.from_pretrained(model_name, output_hidden_states=True,
-                                          # output_attentions=True
-                                          ),
-                BertForMaskedLM.from_pretrained(model_name, is_decoder=True)
-            )
+            decoder_config = AutoConfig.from_pretrained(model_name, is_decoder=True)
+            res_model = PreTrainedEncoderDecoder.from_pretrained(model_name, model_name,
+                                                                 decoder_config=decoder_config)
         if v == 2:
             res_model = Model2Model.from_pretrained(model_name)
 

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Subset
 from transformers import BertTokenizer, AdamW, get_linear_schedule_with_warmup
 
 from src.data import PremiseGenerationDataset
-from src.models import PremiseGenerator, get_model
+from src.models import get_model
 from src.train import PremiseGeneratorTrainer
 from src.utils import FitResult, get_max_len
 import math
