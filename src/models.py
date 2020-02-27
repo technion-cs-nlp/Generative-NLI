@@ -1,16 +1,18 @@
 import torch.nn as nn
-from transformers import Model2Model, BertTokenizer, BertForMaskedLM, PreTrainedEncoderDecoder, BertModel, \
-    GPT2LMHeadModel, AutoConfig
+from transformers import Model2Model, BertForMaskedLM, PreTrainedEncoderDecoder, BertModel, \
+    GPT2LMHeadModel, AutoConfig, AutoTokenizer
 
 
 class PremiseGeneratorHybrid(nn.Module):
-    def __init__(self, bert_name, gpt_name, bert_tokenizer, gpt_tokenizer):
+    def __init__(self, bert_name, gpt_name, tokenizers):
         super().__init__()
         self.encoder = BertModel.from_pretrained(bert_name)
         self.decoder = GPT2LMHeadModel.from_pretrained(gpt_name, is_decoder=True)
+        self.bert_tokenizer = tokenizers[0]
+        self.gpt_tokenizer = tokenizers[1]
 
-        self.encoder.resize_token_embeddings(len(bert_tokenizer))
-        self.decoder.resize_token_embeddings(len(gpt_tokenizer))
+        self.encoder.resize_token_embeddings(len(self.bert_tokenizer))
+        self.decoder.resize_token_embeddings(len(self.gpt_tokenizer))
 
     def forward(self, encoder_input_ids, decoder_input_ids, **kwargs):
         kwargs_encoder, kwargs_decoder = Model2Model.prepare_model_kwargs(
@@ -24,16 +26,19 @@ class PremiseGeneratorHybrid(nn.Module):
             encoder_outputs = ()
 
         kwargs_decoder["inputs_embeds"] = encoder_hidden_states
+        kwargs_decoder["labels"] = kwargs_decoder.pop("lm_labels", None)
+        kwargs_decoder.pop("encoder_attention_mask", None)
         decoder_outputs = self.decoder(decoder_input_ids, **kwargs_decoder)
 
         return decoder_outputs + encoder_outputs
 
 
-def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, v=1):
+def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, v=1, model_name_decoder=None):
     res_model = None
     if tokenizer is None:
-        tokenizer = BertTokenizer.from_pretrained(model_name)
-    assert model in ['masked', 'encode-decode'], f"Please pick a valid model in {['masked', 'encode-decode']}"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model_list = ['masked', 'encode-decode', 'hybrid']
+    assert model in model_list, f"Please pick a valid model in {model_list}"
 
     if model == 'encode-decode':
         if v == 1:
@@ -49,5 +54,9 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     elif model == 'masked':
         res_model = BertForMaskedLM.from_pretrained(model_name)
         res_model.resize_token_embeddings(len(tokenizer))
+
+    elif model == 'hybrid':
+        decoder_tokenizer = AutoTokenizer.from_pretrained(model_name_decoder)
+        res_model = PremiseGeneratorHybrid(model_name, model_name_decoder, [tokenizer, decoder_tokenizer])
 
     return res_model

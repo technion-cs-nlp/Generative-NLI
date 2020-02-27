@@ -266,9 +266,6 @@ class PremiseGeneratorTrainer(Trainer):
         self.optimizer.zero_grad()
 
         outputs = self.model(x, y, **model_kwargs)
-        # encoder_hidden_states = outputs[2]
-        # model_kwargs['encoder_hidden_states'] = encoder_hidden_states
-        # outputs = self.model(x, y, **model_kwargs)
 
         loss = outputs[0]
 
@@ -277,7 +274,13 @@ class PremiseGeneratorTrainer(Trainer):
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
 
-        return BatchResult(loss.item(), 0)
+        self.model.train(False)  # small hack but it's working
+        acc = self.test_batch(batch)
+
+        num_correct = acc.num_correct
+        self.model.train(True)
+
+        return BatchResult(loss.item(), num_correct)
 
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
@@ -315,11 +318,7 @@ class PremiseGeneratorTrainer(Trainer):
                 curr_x[:, 1] = label_id
                 with torch.no_grad():
                     outputs = self.model(curr_x, y[i].unsqueeze(0), **model_kwargs)
-                    # encoder_hidden_states = outputs[2]
-                    # model_kwargs['encoder_hidden_states'] = encoder_hidden_states
-                    # outputs = self.model(curr_x, y[i].unsqueeze(0), **model_kwargs)
                     loss = outputs[0]
-                    # model_kwargs.pop('encoder_hidden_states')
 
                 if loss < best_res[0]:
                     best_res = (loss, label_id)
