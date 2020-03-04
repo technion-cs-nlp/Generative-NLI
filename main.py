@@ -18,6 +18,7 @@ import math
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli',
                    model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name='gpt2', seed=None,
+                   drive=False,
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0,
@@ -92,7 +93,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
 
     trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, max_len, labels_ids, device)
-    fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints)
+    fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints, drive=drive)
     save_experiment(run_name, out_dir, cfg, fit_res)
 
 
@@ -133,6 +134,8 @@ def parse_cli():
                         default='./results', required=False)
     sp_exp.add_argument('--seed', '-s', type=int, help='Random seed',
                         default=None, required=False)
+    sp_exp.add_argument('--drive', '-d', type=bool, help='Pass "True" if you are running this on Google Colab',
+                        default=False, required=False)
 
     # # Training
     sp_exp.add_argument('--bs-train', type=int, help='Train batch size',

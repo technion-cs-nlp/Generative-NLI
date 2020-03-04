@@ -11,6 +11,7 @@ from pathlib import Path
 from src.utils import BatchResult, EpochResult, FitResult
 
 writer = SummaryWriter()
+return_acc = False
 
 
 class Trainer(abc.ABC):
@@ -63,7 +64,11 @@ class Trainer(abc.ABC):
 
         checkpoint_filename = None
         if checkpoints is not None:
-            checkpoint_filename = f'{checkpoints}.pt'
+            drive = kw.pop('drive', False)
+            if drive:
+                checkpoint_filename = f'/content/drive/My Drive/PremiseGeneratorBert/{checkpoints}.pt'
+            else:
+                checkpoint_filename = f'{checkpoints}.pt'
             Path(os.path.dirname(checkpoint_filename)).mkdir(exist_ok=True)
             if os.path.isfile(checkpoint_filename):
                 print(f'*** Loading checkpoint file {checkpoint_filename}')
@@ -73,6 +78,7 @@ class Trainer(abc.ABC):
                 epochs_without_improvement = \
                     saved_state.get('ewi', epochs_without_improvement)
                 self.model.load_state_dict(saved_state['model_state'])
+        kw.pop('drive', None)
 
         for epoch in range(num_epochs):
             save_checkpoint = False
@@ -141,7 +147,7 @@ class Trainer(abc.ABC):
         :return: An EpochResult for the epoch.
         """
         self.model.train(True)  # set train mode
-        return self._foreach_batch(dl_train, self.train_batch, **kw)
+        return self._foreach_batch(dl_train, self.train_batch, mode='train', **kw)
 
     def test_epoch(self, dl_test: DataLoader, **kw) -> EpochResult:
         """
@@ -151,7 +157,7 @@ class Trainer(abc.ABC):
         :return: An EpochResult for the epoch.
         """
         self.model.train(False)  # set evaluation (test) mode
-        return self._foreach_batch(dl_test, self.test_batch, **kw)
+        return self._foreach_batch(dl_test, self.test_batch, mode='test', **kw)
 
     @abc.abstractmethod
     def train_batch(self, batch) -> BatchResult:
@@ -187,11 +193,12 @@ class Trainer(abc.ABC):
     @staticmethod
     def _foreach_batch(dl: DataLoader,
                        forward_fn: Callable[[Any], BatchResult],
-                       verbose=True, max_batches=None) -> EpochResult:
+                       verbose=True, max_batches=None, mode='train') -> EpochResult:
         """
         Evaluates the given forward-function on batches from the given
         dataloader, and prints progress along the way.
         """
+        global return_acc
         losses = []
         num_correct = 0
         num_samples = len(dl.sampler)
@@ -213,6 +220,9 @@ class Trainer(abc.ABC):
             dl_iter = iter(dl)
             for batch_idx in range(num_batches):
                 data = next(dl_iter)
+                if batch_idx == num_batches - 1:
+                    return_acc = True
+
                 batch_res = forward_fn(data)
 
                 pbar.set_description(f'{pbar_name} ({batch_res.loss:.3f})')
@@ -222,10 +232,12 @@ class Trainer(abc.ABC):
                 num_correct += batch_res.num_correct
 
             avg_loss = sum(losses) / num_batches
-            accuracy = 100. * num_correct / num_samples
+            num = num_samples if mode == 'test' else num_samples/num_batches
+            accuracy = 100. * num_correct / num
             pbar.set_description(f'{pbar_name} '
                                  f'(Avg. Loss {avg_loss:.3f}, '
                                  f'Accuracy {accuracy:.1f})')
+        return_acc = False
 
         return EpochResult(losses=losses, accuracy=accuracy)
 
@@ -245,7 +257,6 @@ class PremiseGeneratorTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        # return BatchResult(float(0),0)
         x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
         x = x.to(self.device)
         y = y.to(self.device)
@@ -268,17 +279,20 @@ class PremiseGeneratorTrainer(Trainer):
         outputs = self.model(x, y, **model_kwargs)
 
         loss = outputs[0]
+        loss = loss.mean()
 
         loss.backward()
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
 
-        self.model.train(False)  # small hack but it's working
-        acc = self.test_batch(batch)
+        num_correct = 0
+        if return_acc:
+            self.model.train(False)  # small hack but it's working
+            acc = self.test_batch(batch)
 
-        num_correct = acc.num_correct
-        self.model.train(True)
+            num_correct = acc.num_correct
+            self.model.train(True)
 
         return BatchResult(loss.item(), num_correct)
 
@@ -319,6 +333,7 @@ class PremiseGeneratorTrainer(Trainer):
                 with torch.no_grad():
                     outputs = self.model(curr_x, y[i].unsqueeze(0), **model_kwargs)
                     loss = outputs[0]
+                    loss = loss.mean()
 
                 if loss < best_res[0]:
                     best_res = (loss, label_id)
