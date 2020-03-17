@@ -10,7 +10,6 @@ from typing import Callable, Any
 from pathlib import Path
 from src.utils import BatchResult, EpochResult, FitResult
 
-writer = SummaryWriter()
 return_acc = False
 
 
@@ -35,12 +34,14 @@ class Trainer(abc.ABC):
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.device = device
+        self.batch_idx = 0
+        self.epoch = 0
         model.to(self.device)
 
     def fit(self, dl_train: DataLoader, dl_test: DataLoader,
             num_epochs, checkpoints: str = None,
             early_stopping: int = None,
-            print_every=1, post_epoch_fn=None, **kw) -> FitResult:
+            print_every=1, post_epoch_fn=None, writer=None, **kw) -> FitResult:
         """
         Trains the model for multiple epochs with a given training set,
         and calculates validation loss over a given validation set.
@@ -58,17 +59,21 @@ class Trainer(abc.ABC):
         """
         actual_num_epochs = 0
         train_loss, train_acc, test_loss, test_acc = [], [], [], []
+        batch_idx = 0
 
         best_acc = None
         epochs_without_improvement = 0
 
         checkpoint_filename = None
+        model_filename = None
         if checkpoints is not None:
             drive = kw.pop('drive', False)
             if drive:
                 checkpoint_filename = f'/content/drive/My Drive/PremiseGeneratorBert/{checkpoints}.pt'
+                model_filename = f'/content/drive/My Drive/PremiseGeneratorBert/{checkpoints}_model'
             else:
                 checkpoint_filename = f'{checkpoints}.pt'
+                model_filename = f'{checkpoints}_model'
             Path(os.path.dirname(checkpoint_filename)).mkdir(exist_ok=True)
             if os.path.isfile(checkpoint_filename):
                 print(f'*** Loading checkpoint file {checkpoint_filename}')
@@ -77,42 +82,75 @@ class Trainer(abc.ABC):
                 best_acc = saved_state.get('best_acc', best_acc)
                 epochs_without_improvement = \
                     saved_state.get('ewi', epochs_without_improvement)
+                train_loss = saved_state.get('train_loss', train_loss)
+                train_acc = saved_state.get('train_acc', train_acc)
+                test_loss = saved_state.get('test_loss', test_loss)
+                test_acc = saved_state.get('test_acc', test_acc)
+                writer = saved_state.get('writer', writer)
+                batch_idx = saved_state.get('batch_idx', batch_idx)
+                actual_num_epochs = saved_state.get('ane', actual_num_epochs)
+                # self.model.from_pretrained(os.path.join(model_filename, 'encoder'),
+                #                            os.path.join(model_filename, 'decoder'))
+                # self.model.to(self.device)
                 self.model.load_state_dict(saved_state['model_state'])
+                # self.optimizer.load_state_dict(saved_state['optimizer_state'])
         kw.pop('drive', None)
 
-        for epoch in range(num_epochs):
+        def save_model(b_idx):
+            self.model.eval()
+            saved_state = dict(best_acc=best_acc,
+                               ewi=epochs_without_improvement,
+                               model_state=self.model.state_dict(),
+                               train_loss=train_loss,
+                               train_acc=train_acc,
+                               test_loss=test_loss,
+                               test_acc=test_acc,
+                               writer=writer,
+                               batch_idx=b_idx,
+                               ane=actual_num_epochs
+                               # optimizer_state=self.optimizer.state_dict()
+                               )
+            torch.save(saved_state, checkpoint_filename)
+            print(f'*** Saved checkpoint {checkpoint_filename} '
+                  f'at epoch {epoch + 1}')
+            # self.model.save_pretrained(model_filename)
+            self.model.train()
+            if writer is not None and b_idx > 0:
+                writer.add_scalar('Loss/train', train_loss[-1], epoch)
+                writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
+
+        while actual_num_epochs < num_epochs:
+            epoch = actual_num_epochs
             save_checkpoint = False
             verbose = False  # pass this to train/test_epoch.
             if epoch % print_every == 0 or epoch == num_epochs - 1:
                 verbose = True
             self._print(f'--- EPOCH {epoch + 1}/{num_epochs} ---', verbose)
 
-            # TODO: Train & evaluate for one epoch
-            # - Use the train/test_epoch methods.
-            # - Save losses and accuracies in the lists above.
-            # - Implement early stopping. This is a very useful and
-            #   simple regularization technique that is highly recommended.
-            # ====== YOUR CODE: ======
-            actual_num_epochs += 1
+            kw['func'] = save_model
+            kw['batch_idx'] = batch_idx
+
             if not best_acc:
                 best_acc = -1
             train_result = self.train_epoch(dl_train, **kw)
             train_loss.append(torch.tensor(train_result.losses).mean().item())
             train_acc.append(train_result.accuracy)
 
-            writer.add_scalar('Loss/train', train_loss[-1], epoch)
-            writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
+            if writer is not None:
+                writer.add_scalar('Loss/train', train_loss[-1], epoch)
+                writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
 
+            batch_idx = 0
+            kw['batch_idx'] = 0
             test_result = self.test_epoch(dl_test, **kw)
             test_loss.append(torch.tensor(test_result.losses).mean().item())
             test_acc.append(test_result.accuracy)
 
-            writer.add_scalar('Loss/test', test_loss[-1], epoch)
-            writer.add_scalar('Accuracy/test', test_acc[-1], epoch)
+            if writer is not None:
+                writer.add_scalar('Loss/test', test_loss[-1], epoch)
+                writer.add_scalar('Accuracy/test', test_acc[-1], epoch)
 
-            curr_loss = test_loss[-1]
-            best_loss = min(test_loss[:-1]) if len(test_loss) >= 2 else 1e3
-            if early_stopping and (curr_loss > best_loss - 1e-4):
+            if early_stopping and test_acc[-1] < best_acc:
                 epochs_without_improvement += 1
                 if epochs_without_improvement >= early_stopping:
                     break
@@ -122,22 +160,46 @@ class Trainer(abc.ABC):
             if checkpoints is not None and test_acc[-1] > best_acc:
                 save_checkpoint = True
                 best_acc = test_acc[-1]
+
+            if test_acc[-1] > best_acc:
+                best_acc = test_acc[-1]
+
+            actual_num_epochs += 1
             # ========================
 
             # Save model checkpoint if requested
             if save_checkpoint and checkpoint_filename is not None:
-                saved_state = dict(best_acc=best_acc,
-                                   ewi=epochs_without_improvement,
-                                   model_state=self.model.state_dict())
-                torch.save(saved_state, checkpoint_filename)
-                print(f'*** Saved checkpoint {checkpoint_filename} '
-                      f'at epoch {epoch + 1}')
+                save_model(0)
 
             if post_epoch_fn:
                 post_epoch_fn(epoch, train_result, test_result, verbose)
 
         return FitResult(actual_num_epochs,
                          train_loss, train_acc, test_loss, test_acc)
+
+    def test(self, dl_test: DataLoader, post_epoch_fn=None, writer=None, **kw) -> FitResult:
+
+        test_loss, test_acc = [], []
+
+        verbose = False  # pass this to train/test_epoch.
+
+        kw['func'] = None
+
+        kw['batch_idx'] = 0
+        test_result = self.test_epoch(dl_test, **kw)
+        test_loss.append(torch.tensor(test_result.losses).mean().item())
+        test_acc.append(test_result.accuracy)
+
+        if writer is not None:
+            writer.add_scalar('Loss/test', test_loss[-1], 0)
+            writer.add_scalar('Accuracy/test', test_acc[-1], 0)
+        # ========================
+
+        if post_epoch_fn:
+            post_epoch_fn(0, EpochResult([0], 0), test_result, verbose)
+
+        return FitResult(0,
+                         0, 0, test_loss, test_acc)
 
     def train_epoch(self, dl_train: DataLoader, **kw) -> EpochResult:
         """
@@ -146,7 +208,7 @@ class Trainer(abc.ABC):
         :param kw: Keyword args supported by _foreach_batch.
         :return: An EpochResult for the epoch.
         """
-        self.model.train(True)  # set train mode
+        self.model.train()  # set train mode
         return self._foreach_batch(dl_train, self.train_batch, mode='train', **kw)
 
     def test_epoch(self, dl_test: DataLoader, **kw) -> EpochResult:
@@ -156,7 +218,7 @@ class Trainer(abc.ABC):
         :param kw: Keyword args supported by _foreach_batch.
         :return: An EpochResult for the epoch.
         """
-        self.model.train(False)  # set evaluation (test) mode
+        self.model.eval()  # set evaluation (test) mode
         return self._foreach_batch(dl_test, self.test_batch, mode='test', **kw)
 
     @abc.abstractmethod
@@ -193,7 +255,7 @@ class Trainer(abc.ABC):
     @staticmethod
     def _foreach_batch(dl: DataLoader,
                        forward_fn: Callable[[Any], BatchResult],
-                       verbose=True, max_batches=None, mode='train') -> EpochResult:
+                       verbose=True, max_batches=None, mode='train', func=None, batch_idx=0) -> EpochResult:
         """
         Evaluates the given forward-function on batches from the given
         dataloader, and prints progress along the way.
@@ -218,7 +280,11 @@ class Trainer(abc.ABC):
         with tqdm.tqdm(desc=pbar_name, total=num_batches,
                        file=pbar_file) as pbar:
             dl_iter = iter(dl)
-            for batch_idx in range(num_batches):
+            if mode == 'train':
+                for _ in range(batch_idx):
+                    next(dl_iter)
+                    pbar.update()
+            while batch_idx < num_batches:
                 data = next(dl_iter)
                 if batch_idx == num_batches - 1:
                     return_acc = True
@@ -231,8 +297,13 @@ class Trainer(abc.ABC):
                 losses.append(batch_res.loss)
                 num_correct += batch_res.num_correct
 
+                batch_idx += 1
+
+                if batch_idx % 1000 == 0 and func is not None and mode == 'train':
+                    func(batch_idx)
+
             avg_loss = sum(losses) / num_batches
-            num = num_samples if mode == 'test' else num_samples/num_batches
+            num = num_samples if mode == 'test' else num_samples / num_batches
             accuracy = 100. * num_correct / num
             pbar.set_description(f'{pbar_name} '
                                  f'(Avg. Loss {avg_loss:.3f}, '
@@ -279,7 +350,7 @@ class PremiseGeneratorTrainer(Trainer):
         outputs = self.model(x, y, **model_kwargs)
 
         loss = outputs[0]
-        loss = loss.mean()
+        loss = loss.clone().mean()
 
         loss.backward()
 
@@ -288,11 +359,10 @@ class PremiseGeneratorTrainer(Trainer):
 
         num_correct = 0
         if return_acc:
-            self.model.train(False)  # small hack but it's working
+            self.model.eval()  # small hack but it's working
             acc = self.test_batch(batch)
-
             num_correct = acc.num_correct
-            self.model.train(True)
+            self.model.train()
 
         return BatchResult(loss.item(), num_correct)
 
@@ -305,47 +375,58 @@ class PremiseGeneratorTrainer(Trainer):
         decoder_attention_mask = decoder_attention_mask.to(self.device)
         decoder_token_type_ids = decoder_token_type_ids.to(self.device)
 
-        model_kwargs = {
-            # "encoder_token_type_ids": encoder_token_type_ids,
-            "encoder_attention_mask": encoder_attention_mask,
-            # "decoder_token_type_ids": decoder_token_type_ids,
-            "decoder_attention_mask": decoder_attention_mask,
-            "decoder_lm_labels": y
-        }
-
         correct_labels = x[:, 1].clone()
         total_loss = torch.zeros(1, dtype=float)
         pred = []
 
-        for i in range(x.size(0)):
-            best_res = (torch.tensor(1e9), None)
-            model_kwargs = {
-                # "encoder_token_type_ids": encoder_token_type_ids,
-                "encoder_attention_mask": encoder_attention_mask[i].unsqueeze(0),
-                # "decoder_token_type_ids": decoder_token_type_ids,
-                "decoder_attention_mask": decoder_attention_mask[i].unsqueeze(0),
-                "decoder_lm_labels": y[i].unsqueeze(0)
-            }
-            for label_id in self.labels:
-                curr_x = x[i].clone().to(self.device)
-                curr_x = curr_x.unsqueeze(0)
-                curr_x[:, 1] = label_id
-                with torch.no_grad():
-                    outputs = self.model(curr_x, y[i].unsqueeze(0), **model_kwargs)
-                    loss = outputs[0]
-                    loss = loss.mean()
+        batch_size = x.size(0)
 
-                if loss < best_res[0]:
-                    best_res = (loss, label_id)
+        best_res = [(torch.tensor(1e9), -1) for _ in range(batch_size)]
 
-            total_loss += best_res[0]
-            pred.append(best_res[1])
+        inp_x = []
+        inp_y = []
+        inp_e_a_m = []
+        inp_d_a_m = []
 
-        pred = torch.tensor(pred)
+        for label_id in self.labels:
+            curr_x = x.clone().to(self.device)
+            curr_x[:, 1] = label_id
+            inp_x.append(curr_x)
+            inp_y.append(y.clone())
+            inp_e_a_m.append(encoder_attention_mask.clone())
+            inp_d_a_m.append(decoder_attention_mask.clone())
+
+        inp_x = torch.cat(inp_x)
+        inp_y = torch.cat(inp_y)
+        inp_e_a_m = torch.cat(inp_e_a_m)
+        inp_d_a_m = torch.cat(inp_d_a_m)
+
+        model_kwargs = {
+            # "encoder_token_type_ids": encoder_token_type_ids,
+            "encoder_attention_mask": inp_e_a_m,
+            # "decoder_token_type_ids": decoder_token_type_ids,
+            "decoder_attention_mask": inp_d_a_m,
+            "decoder_lm_labels": inp_y
+        }
+        with torch.no_grad():
+            outputs = self.model(inp_x, inp_y, **model_kwargs)
+            loss = outputs[0]
+            loss = loss.view(inp_x.size(0), -1)
+
+        loss = loss.mean(dim=1)
+
+        for i in range(len(self.labels)):
+            for j in range(batch_size):
+                curr_loss = loss[i * batch_size + j]
+                if loss[i * batch_size + j] < best_res[j][0]:
+                    best_res[j] = (curr_loss, self.labels[i])
+
+        total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
+
+        pred = torch.tensor([label[1] for label in best_res])
         pred.to('cpu')
         correct_labels = correct_labels.to('cpu')
         # import pdb; pdb.set_trace()
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
-        return BatchResult(loss.item(), num_correct.item())
-
+        return BatchResult(total_loss.item(), num_correct.item())
