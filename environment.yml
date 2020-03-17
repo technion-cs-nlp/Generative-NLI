@@ -1,0 +1,24 @@
+name: dimi
+channels:
+  - pytorch
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.7
+  - pytorch
+  - torchvision
+  - cudatoolkit
+  - jupyterlab
+  - numpy
+  - scikit-learn
+  - matplotlib
+  - ipython
+  - jupyter
+  - pandas
+  - cython
+  - pytest
+  - tqdm
+  - transformers
+  - pip:
+    - nbmerge
+    - pytest-xdist
