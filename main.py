@@ -160,17 +160,20 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if model_path is None:
-        model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
-                          model_name_decoder=decoder_model_name)
-    elif model_type == 'encode-decode':
-        model = PreTrainedEncoderDecoder.from_pretrained(os.path.join(model_path, 'encoder'),
-                                                         os.path.join(model_path, 'decoder'))
+    if checkpoints is None:
+        if model_path is None:
+            model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
+                            model_name_decoder=decoder_model_name)
+        elif model_type == 'encode-decode':
+            model = PreTrainedEncoderDecoder.from_pretrained(os.path.join(model_path, 'encoder'),
+                                                            os.path.join(model_path, 'decoder'))
+        else:
+            model = AutoModel.from_pretrained(model_path)
+        model.to(device)
     else:
-        model = AutoModel.from_pretrained(model_path)
-
-    model.to(device)
-
+            model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
+                            model_name_decoder=decoder_model_name)
+                            
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
 
@@ -179,7 +182,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         writer = SummaryWriter()
 
     trainer = PremiseGeneratorTrainer(model, tokenizer, None, None, max_len, labels_ids, device)
-    fit_res = trainer.test(dl_test, writer=writer)
+    fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
 
 
@@ -299,6 +302,8 @@ def parse_cli():
                          help='Path to fined-tuned model', default=None)
     sp_test.add_argument('--model-type', type=str,
                          help='Type of the model (encode-decode or hybrid)', default='encode-decode')
+    sp_test.add_argument('--checkpoints', type=str,
+                         help='Checkpoint to torch model', default=None)
     sp_test.add_argument('--decoder-model-name', type=str,
                          help='Only if model type is hybrid', default='gpt2')
 

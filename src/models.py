@@ -1,5 +1,5 @@
 import torch.nn as nn
-from transformers import Model2Model, BertForMaskedLM, PreTrainedEncoderDecoder, BertModel, \
+from transformers import BertForMaskedLM, PreTrainedEncoderDecoder, BertModel, \
     GPT2LMHeadModel, AutoConfig, AutoTokenizer
 
 

@@ -59,7 +59,6 @@ class Trainer(abc.ABC):
         """
         actual_num_epochs = 0
         train_loss, train_acc, test_loss, test_acc = [], [], [], []
-        batch_idx = 0
 
         best_acc = None
         epochs_without_improvement = 0
@@ -87,37 +86,10 @@ class Trainer(abc.ABC):
                 test_loss = saved_state.get('test_loss', test_loss)
                 test_acc = saved_state.get('test_acc', test_acc)
                 writer = saved_state.get('writer', writer)
-                batch_idx = saved_state.get('batch_idx', batch_idx)
                 actual_num_epochs = saved_state.get('ane', actual_num_epochs)
-                # self.model.from_pretrained(os.path.join(model_filename, 'encoder'),
-                #                            os.path.join(model_filename, 'decoder'))
-                # self.model.to(self.device)
-                self.model.load_state_dict(saved_state['model_state'])
-                # self.optimizer.load_state_dict(saved_state['optimizer_state'])
+                self.model.from_pretrained(model_filename)
+                self.model.to(self.device)
         kw.pop('drive', None)
-
-        def save_model(b_idx):
-            self.model.eval()
-            saved_state = dict(best_acc=best_acc,
-                               ewi=epochs_without_improvement,
-                               model_state=self.model.state_dict(),
-                               train_loss=train_loss,
-                               train_acc=train_acc,
-                               test_loss=test_loss,
-                               test_acc=test_acc,
-                               writer=writer,
-                               batch_idx=b_idx,
-                               ane=actual_num_epochs
-                               # optimizer_state=self.optimizer.state_dict()
-                               )
-            torch.save(saved_state, checkpoint_filename)
-            print(f'*** Saved checkpoint {checkpoint_filename} '
-                  f'at epoch {epoch + 1}')
-            # self.model.save_pretrained(model_filename)
-            self.model.train()
-            if writer is not None and b_idx > 0:
-                writer.add_scalar('Loss/train', train_loss[-1], epoch)
-                writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
 
         while actual_num_epochs < num_epochs:
             epoch = actual_num_epochs
@@ -126,9 +98,6 @@ class Trainer(abc.ABC):
             if epoch % print_every == 0 or epoch == num_epochs - 1:
                 verbose = True
             self._print(f'--- EPOCH {epoch + 1}/{num_epochs} ---', verbose)
-
-            kw['func'] = save_model
-            kw['batch_idx'] = batch_idx
 
             if not best_acc:
                 best_acc = -1
@@ -140,8 +109,6 @@ class Trainer(abc.ABC):
                 writer.add_scalar('Loss/train', train_loss[-1], epoch)
                 writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
 
-            batch_idx = 0
-            kw['batch_idx'] = 0
             test_result = self.test_epoch(dl_test, **kw)
             test_loss.append(torch.tensor(test_result.losses).mean().item())
             test_acc.append(test_result.accuracy)
@@ -169,7 +136,23 @@ class Trainer(abc.ABC):
 
             # Save model checkpoint if requested
             if save_checkpoint and checkpoint_filename is not None:
-                save_model(0)
+                saved_state = dict(best_acc=best_acc,
+                               ewi=epochs_without_improvement,
+                            #    model_state=self.model.state_dict(),
+                               train_loss=train_loss,
+                               train_acc=train_acc,
+                               test_loss=test_loss,
+                               test_acc=test_acc,
+                               writer=writer,
+                               ane=actual_num_epochs
+                               )
+            torch.save(saved_state, checkpoint_filename)
+            print(f'*** Saved checkpoint {checkpoint_filename} '
+                  f'at epoch {epoch + 1}')
+            self.model.save_pretrained(model_filename)
+            if writer is not None:
+                writer.add_scalar('Loss/train', train_loss[-1], epoch)
+                writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
 
             if post_epoch_fn:
                 post_epoch_fn(epoch, train_result, test_result, verbose)
@@ -177,11 +160,34 @@ class Trainer(abc.ABC):
         return FitResult(actual_num_epochs,
                          train_loss, train_acc, test_loss, test_acc)
 
-    def test(self, dl_test: DataLoader, post_epoch_fn=None, writer=None, **kw) -> FitResult:
+    def test(self, dl_test: DataLoader,checkpoints=None, post_epoch_fn=None, writer=None, **kw) -> FitResult:
 
         test_loss, test_acc = [], []
 
         verbose = False  # pass this to train/test_epoch.
+
+        if checkpoints is not None:
+            drive = kw.pop('drive', False)
+            if drive:
+                checkpoint_filename = f'/content/drive/My Drive/PremiseGeneratorBert/{checkpoints}.pt'
+                model_filename = f'/content/drive/My Drive/PremiseGeneratorBert/{checkpoints}_model'
+            else:
+                checkpoint_filename = f'{checkpoints}.pt'
+                model_filename = f'{checkpoints}_model'
+            Path(os.path.dirname(checkpoint_filename)).mkdir(exist_ok=True)
+            if os.path.isfile(checkpoint_filename):
+                print(f'*** Loading checkpoint file {checkpoint_filename}')
+                saved_state = torch.load(checkpoint_filename,
+                                         map_location=self.device)
+                # best_acc = saved_state.get('best_acc', best_acc)
+                # epochs_without_improvement = \
+                #     saved_state.get('ewi', epochs_without_improvement)
+                # train_loss = saved_state.get('train_loss', train_loss)
+                # train_acc = saved_state.get('train_acc', train_acc)
+                test_loss = saved_state.get('test_loss', test_loss)
+                test_acc = saved_state.get('test_acc', test_acc)
+                writer = saved_state.get('writer', writer)
+                self.model.load_state_dict(saved_state['model_state'])
 
         kw['func'] = None
 
@@ -255,7 +261,7 @@ class Trainer(abc.ABC):
     @staticmethod
     def _foreach_batch(dl: DataLoader,
                        forward_fn: Callable[[Any], BatchResult],
-                       verbose=True, max_batches=None, mode='train', func=None, batch_idx=0) -> EpochResult:
+                       verbose=True, max_batches=None, mode='train') -> EpochResult:
         """
         Evaluates the given forward-function on batches from the given
         dataloader, and prints progress along the way.
@@ -280,11 +286,7 @@ class Trainer(abc.ABC):
         with tqdm.tqdm(desc=pbar_name, total=num_batches,
                        file=pbar_file) as pbar:
             dl_iter = iter(dl)
-            if mode == 'train':
-                for _ in range(batch_idx):
-                    next(dl_iter)
-                    pbar.update()
-            while batch_idx < num_batches:
+            for batch_idx in range(num_batches):
                 data = next(dl_iter)
                 if batch_idx == num_batches - 1:
                     return_acc = True
@@ -296,11 +298,6 @@ class Trainer(abc.ABC):
 
                 losses.append(batch_res.loss)
                 num_correct += batch_res.num_correct
-
-                batch_idx += 1
-
-                if batch_idx % 1000 == 0 and func is not None and mode == 'train':
-                    func(batch_idx)
 
             avg_loss = sum(losses) / num_batches
             num = num_samples if mode == 'test' else num_samples / num_batches
@@ -314,7 +311,7 @@ class Trainer(abc.ABC):
 
 
 class PremiseGeneratorTrainer(Trainer):
-    def __init__(self, model, tokenizer, loss_fn, optimizer, max_len=30, possible_labels_ids=None, device=None):
+    def __init__(self, model, tokenizer, loss_fn, optimizer, max_len=128, possible_labels_ids=None, device=None):
         super().__init__(model, loss_fn, optimizer, device)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
