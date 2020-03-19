@@ -4,7 +4,7 @@ channels:
   - defaults
   - conda-forge
 dependencies:
-  - python=3.7
+  - python
   - pytorch
   - torchvision
   - cudatoolkit
@@ -18,7 +18,8 @@ dependencies:
   - cython
   - pytest
   - tqdm
-  - transformers
+  - filelock
+  - tensorboard
   - pip:
     - nbmerge
     - pytest-xdist
