@@ -33,20 +33,16 @@ class PremiseGeneratorHybrid(nn.Module):
         return decoder_outputs + encoder_outputs
 
 
-def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, v=1, model_name_decoder=None):
+def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, model_name_decoder=None):
     res_model = None
     if tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model_list = ['masked', 'encode-decode', 'hybrid']
-    assert model in model_list, f"Please pick a valid model in {model_list}"
+    model_list = ['masked', 'encode-decode', 'hybrid', 'decoder']
 
     if model == 'encode-decode':
-        if v == 1:
-            decoder_config = AutoConfig.from_pretrained(model_name, is_decoder=True)
-            res_model = PreTrainedEncoderDecoder.from_pretrained(model_name, model_name,
-                                                                 decoder_config=decoder_config)
-        if v == 2:
-            res_model = Model2Model.from_pretrained(model_name)
+        decoder_config = AutoConfig.from_pretrained(model_name, is_decoder=True)
+        res_model = PreTrainedEncoderDecoder.from_pretrained(model_name, model_name,
+                                                                decoder_config=decoder_config)
 
         res_model.encoder.resize_token_embeddings(len(tokenizer))
         res_model.decoder.resize_token_embeddings(len(tokenizer))
@@ -59,4 +55,11 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         decoder_tokenizer = AutoTokenizer.from_pretrained(model_name_decoder)
         res_model = PremiseGeneratorHybrid(model_name, model_name_decoder, [tokenizer, decoder_tokenizer])
 
+    elif model == 'decoder':
+        res_model = GPT2LMHeadModel.from_pretrained(model_name)
+        res_model.resize_token_embeddings(len(tokenizer))
+
+    else: 
+        print(f"Please pick a valid model in {model_list}")
+        
     return res_model

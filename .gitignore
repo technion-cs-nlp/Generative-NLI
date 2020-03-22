@@ -3,3 +3,4 @@
 checkpoints
 *.pyc
 data/*
+runs/*

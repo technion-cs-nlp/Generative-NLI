@@ -146,13 +146,13 @@ class Trainer(abc.ABC):
                                writer=writer,
                                ane=actual_num_epochs
                                )
-            torch.save(saved_state, checkpoint_filename)
-            print(f'*** Saved checkpoint {checkpoint_filename} '
-                  f'at epoch {epoch + 1}')
-            self.model.save_pretrained(model_filename)
-            if writer is not None:
-                writer.add_scalar('Loss/train', train_loss[-1], epoch)
-                writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
+                torch.save(saved_state, checkpoint_filename)
+                print(f'*** Saved checkpoint {checkpoint_filename} '
+                    f'at epoch {epoch + 1}')
+                self.model.save_pretrained(model_filename)
+                if writer is not None:
+                    writer.add_scalar('Loss/train', train_loss[-1], epoch)
+                    writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
 
             if post_epoch_fn:
                 post_epoch_fn(epoch, train_result, test_result, verbose)
@@ -189,9 +189,6 @@ class Trainer(abc.ABC):
                 writer = saved_state.get('writer', writer)
                 self.model.load_state_dict(saved_state['model_state'])
 
-        kw['func'] = None
-
-        kw['batch_idx'] = 0
         test_result = self.test_epoch(dl_test, **kw)
         test_loss.append(torch.tensor(test_result.losses).mean().item())
         test_acc.append(test_result.accuracy)
@@ -347,8 +344,6 @@ class PremiseGeneratorTrainer(Trainer):
         outputs = self.model(x, y, **model_kwargs)
 
         loss = outputs[0]
-        loss = loss.clone().mean()
-
         loss.backward()
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -361,7 +356,7 @@ class PremiseGeneratorTrainer(Trainer):
             num_correct = acc.num_correct
             self.model.train()
 
-        return BatchResult(loss.item(), num_correct)
+        return BatchResult(loss.mean().item(), num_correct)
 
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
@@ -407,6 +402,101 @@ class PremiseGeneratorTrainer(Trainer):
         }
         with torch.no_grad():
             outputs = self.model(inp_x, inp_y, **model_kwargs)
+            loss = outputs[0]
+            loss = loss.view(inp_x.size(0), -1)
+
+        loss = loss.mean(dim=1)
+
+        for i in range(len(self.labels)):
+            for j in range(batch_size):
+                curr_loss = loss[i * batch_size + j]
+                if loss[i * batch_size + j] < best_res[j][0]:
+                    best_res[j] = (curr_loss, self.labels[i])
+
+        total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
+
+        pred = torch.tensor([label[1] for label in best_res])
+        pred.to('cpu')
+        correct_labels = correct_labels.to('cpu')
+        # import pdb; pdb.set_trace()
+        num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
+
+        return BatchResult(total_loss.item(), num_correct.item())
+
+
+class PremiseGeneratorTrainerGPT2(Trainer):
+    def __init__(self, model, tokenizer, loss_fn, optimizer, max_len=128, possible_labels_ids=None, device=None):
+        super().__init__(model, loss_fn, optimizer, device)
+        # self.evaluator = evaluator
+        self.tokenizer = tokenizer
+        self.labels = possible_labels_ids
+        self.max_len = max_len
+
+    def train_epoch(self, dl_train: DataLoader, **kw):
+        return super().train_epoch(dl_train, **kw)
+
+    def test_epoch(self, dl_test: DataLoader, **kw):
+        return super().test_epoch(dl_test, **kw)
+
+    def train_batch(self, batch) -> BatchResult:
+        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
+        x = x.to(self.device)
+        y = y.to(self.device)
+
+        model_kwargs = {
+            "labels": y
+        }
+
+        self.optimizer.zero_grad()
+
+
+        outputs = self.model(x, **model_kwargs)
+
+        loss = outputs[0]
+        loss.backward()
+
+        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        self.optimizer.step()
+
+        num_correct = 0
+        if return_acc:
+            self.model.eval()  # small hack but it's working
+            acc = self.test_batch(batch)
+            num_correct = acc.num_correct
+            self.model.train()
+
+        return BatchResult(loss.mean().item(), num_correct)
+
+    def test_batch(self, batch) -> BatchResult:
+        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
+        x = x.to(self.device)
+        y = y.to(self.device)
+
+        correct_labels = x[:, 1].clone()
+        total_loss = torch.zeros(1, dtype=float)
+        pred = []
+
+        batch_size = x.size(0)
+
+        best_res = [(torch.tensor(1e9), -1) for _ in range(batch_size)]
+
+        inp_x = []
+        inp_y = []
+
+        for label_id in self.labels:
+            curr_x = x.clone().to(self.device)
+            curr_x[:, 1] = label_id
+            inp_x.append(curr_x)
+            inp_y.append(y.clone())
+
+        inp_x = torch.cat(inp_x)
+        inp_y = torch.cat(inp_y)
+
+        model_kwargs = {
+            "labels": inp_y
+        }
+        with torch.no_grad():
+            outputs = self.model(inp_x, **model_kwargs)
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
 

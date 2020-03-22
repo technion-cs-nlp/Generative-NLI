@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, AdamW, AutoModel, PreTrainedEncoderDecod
 
 from src.data import PremiseGenerationDataset
 from src.models import get_model
-from src.train import PremiseGeneratorTrainer
+from src.train import PremiseGeneratorTrainer, PremiseGeneratorTrainerGPT2
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli', model_path=None,
                    model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name='gpt2', seed=None,
-                   drive=False,
+                   drive=False, do_test=True,
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0,
@@ -35,6 +35,9 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     tf = torchvision.transforms.ToTensor()
 
+    hard_test_labels = None
+    hard_test_lines = None
+
     with open(data_dir_prefix + '_test_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
     with open(data_dir_prefix + '_test_source_file') as test_lines_file:
@@ -47,6 +50,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         val_labels = val_labels_file.readlines()
     with open(data_dir_prefix + '_val_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
+    if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
+        os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
+        with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
+            hard_test_labels = val_labels_file.readlines()
+        with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
+            hard_test_lines = val_lines_file.readlines()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -98,10 +107,24 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if checkpoints is None:
         writer = SummaryWriter()
 
-    trainer = PremiseGeneratorTrainer(model, tokenizer, None, optimizer, max_len, labels_ids, device)
+    if model_type == 'decoder':
+        trainerClass = PremiseGeneratorTrainerGPT2
+    else:
+        trainerClass = PremiseGeneratorTrainer
+
+    trainer = trainerClass(model, tokenizer, None, optimizer, max_len, labels_ids, device)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
+
+    if do_test:
+        trainer.test(dl_test,writer=writer)
+        if hard_test_labels is not None and hard_test_lines is not None:
+            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len)
+            if batches > 0:
+                ds_test = Subset(ds_hard_test, range(batches * bs_test))
+            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
+            trainer.test(dl_hard_test, writer=writer)
 
 
 def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_1.0/cl_snli',
@@ -119,6 +142,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     tf = torchvision.transforms.ToTensor()
 
+    hard_test_labels = None
+    hard_test_lines = None
+
     with open(data_dir_prefix + '_test_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
     with open(data_dir_prefix + '_test_source_file') as test_lines_file:
@@ -127,6 +153,12 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         val_labels = val_labels_file.readlines()
     with open(data_dir_prefix + '_val_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
+    if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
+        os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
+        with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
+            hard_test_labels = val_labels_file.readlines()
+        with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
+            hard_test_lines = val_lines_file.readlines()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -180,10 +212,20 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     writer = None
     if checkpoints is None:
         writer = SummaryWriter()
-
-    trainer = PremiseGeneratorTrainer(model, tokenizer, None, None, max_len, labels_ids, device)
+    if model_type == 'decoder':
+        trainerClass = PremiseGeneratorTrainerGPT2
+    else:
+        trainerClass = PremiseGeneratorTrainer
+    
+    trainer = trainerClass(model, tokenizer, None, None, max_len, labels_ids, device)
     fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
+    if hard_test_labels is not None and hard_test_lines is not None:
+            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len)
+            if batches > 0:
+                ds_test = Subset(ds_hard_test, range(batches * bs_test))
+            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
+            trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
 
 
 def save_experiment(run_name, out_dir, config, fit_res):
@@ -225,6 +267,8 @@ def parse_cli():
                         default=None, required=False)
     sp_exp.add_argument('--drive', '-d', type=bool, help='Pass "True" if you are running this on Google Colab',
                         default=False, required=False)
+    sp_exp.add_argument('--do-test', '-t', type=bool, help='Pass "True" if you want to run a test on test set',
+                        default=True, required=False)                    
 
     # # Training
     sp_exp.add_argument('--bs-train', type=int, help='Train batch size',
