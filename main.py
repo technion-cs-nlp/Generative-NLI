@@ -35,8 +35,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     tf = torchvision.transforms.ToTensor()
 
-    hard_test_labels = None
-    hard_test_lines = None
+    hard_test_labels = []
+    hard_test_lines = []
 
     with open(data_dir_prefix + '_test_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
@@ -63,7 +63,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     size_train = batches * bs_train if batches > 0 else -1
 
     if max_len == 0:
-        max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test],
+        max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
                               '|||', tokenizer)
         print(f'Longest Sequence is: {max_len} token_ids')
         max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
@@ -71,7 +71,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     print(f'Setting max_len to: {max_len}')
 
-    all_labels_text = list(set(test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test]))
+    all_labels_text = list(set(test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
 
     all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
@@ -93,7 +93,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
-                      model_name_decoder=decoder_model_name)
+                      model_name_decoder=decoder_model_name, model_path=model_path)
 
     model.to(device)
 
@@ -119,7 +119,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     if do_test:
         trainer.test(dl_test,writer=writer)
-        if hard_test_labels is not None and hard_test_lines is not None:
+        if len(hard_test_labels) > 0 and len(hard_test_lines) > 0:
             ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
@@ -192,19 +192,10 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if checkpoints is None:
-        if model_path is None:
-            model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
-                            model_name_decoder=decoder_model_name)
-        elif model_type == 'encode-decode':
-            model = PreTrainedEncoderDecoder.from_pretrained(os.path.join(model_path, 'encoder'),
-                                                            os.path.join(model_path, 'decoder'))
-        else:
-            model = AutoModel.from_pretrained(model_path)
-        model.to(device)
-    else:
-            model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
-                            model_name_decoder=decoder_model_name)
+    model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
+                            model_name_decoder=decoder_model_name, model_path=model_path)
+
+    model.to(device)
                             
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)

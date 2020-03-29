@@ -87,8 +87,9 @@ class Trainer(abc.ABC):
                 test_acc = saved_state.get('test_acc', test_acc)
                 writer = saved_state.get('writer', writer)
                 actual_num_epochs = saved_state.get('ane', actual_num_epochs)
-                self.model.from_pretrained(model_filename)
-                self.model.to(self.device)
+                # print(f"Loading model from {model_filename}")
+                # self.model = AutoModel.from_pretrained(model_filename)
+                # self.model.to(self.device)
         kw.pop('drive', None)
 
         while actual_num_epochs < num_epochs:
@@ -187,7 +188,7 @@ class Trainer(abc.ABC):
                 test_loss = saved_state.get('test_loss', test_loss)
                 test_acc = saved_state.get('test_acc', test_acc)
                 writer = saved_state.get('writer', writer)
-                self.model.load_state_dict(saved_state['model_state'])
+                # self.model.load_state_dict(saved_state['model_state'])
 
         test_result = self.test_epoch(dl_test, **kw)
         test_loss.append(torch.tensor(test_result.losses).mean().item())
@@ -344,6 +345,7 @@ class PremiseGeneratorTrainer(Trainer):
         outputs = self.model(x, y, **model_kwargs)
 
         loss = outputs[0]
+        loss = loss.clone().mean()
         loss.backward()
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -356,7 +358,7 @@ class PremiseGeneratorTrainer(Trainer):
             num_correct = acc.num_correct
             self.model.train()
 
-        return BatchResult(loss.mean().item(), num_correct)
+        return BatchResult(loss.item(), num_correct)
 
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
@@ -453,6 +455,7 @@ class PremiseGeneratorTrainerGPT2(Trainer):
         outputs = self.model(x, **model_kwargs)
 
         loss = outputs[0]
+        loss = loss.clone().mean()
         loss.backward()
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -465,7 +468,7 @@ class PremiseGeneratorTrainerGPT2(Trainer):
             num_correct = acc.num_correct
             self.model.train()
 
-        return BatchResult(loss.mean().item(), num_correct)
+        return BatchResult(loss.item(), num_correct)
 
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
