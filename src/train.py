@@ -327,9 +327,9 @@ class PremiseGeneratorTrainer(Trainer):
         x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
-        encoder_token_type_ids = encoder_token_type_ids.to(self.device)
+        # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
-        decoder_token_type_ids = decoder_token_type_ids.to(self.device)
+        # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
 
         model_kwargs = {
             # "encoder_token_type_ids": encoder_token_type_ids,
@@ -362,12 +362,12 @@ class PremiseGeneratorTrainer(Trainer):
 
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
-        x = x.to(self.device)
+        # x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
-        encoder_token_type_ids = encoder_token_type_ids.to(self.device)
+        # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
-        decoder_token_type_ids = decoder_token_type_ids.to(self.device)
+        # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
 
         correct_labels = x[:, 1].clone()
         total_loss = torch.zeros(1, dtype=float)
