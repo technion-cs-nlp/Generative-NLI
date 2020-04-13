@@ -33,6 +33,11 @@ class PremiseGeneratorHybrid(nn.Module):
 
         return decoder_outputs + encoder_outputs
 
+def freeze_params(params, ratio):
+    for idx, param in enumerate(params):
+        if idx > len(params) * ratio:
+            break
+        param.requires_grad = False
 
 def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, model_name_decoder=None, 
             model_path=None):
@@ -52,6 +57,12 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
         res_model.encoder.resize_token_embeddings(len(tokenizer))
         res_model.decoder.resize_token_embeddings(len(tokenizer))
+
+        params_enc = list(res_model.encoder.parameters())
+        params_dec = list(res_model.decoder.parameters())
+
+        freeze_params(params_enc, 0.5)
+        freeze_params(params_dec, 0.5)
 
         return res_model
     

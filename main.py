@@ -7,11 +7,11 @@ import sys
 import torch
 import torchvision
 from torch.utils.data import DataLoader, Subset
-from transformers import AutoTokenizer, AdamW, AutoModel, PreTrainedEncoderDecoder
+from transformers import AutoTokenizer, AdamW, AutoModel, PreTrainedEncoderDecoder, get_linear_schedule_with_warmup
 
 from src.data import PremiseGenerationDataset
 from src.models import get_model
-from src.train import PremiseGeneratorTrainer, PremiseGeneratorTrainerGPT2
+from src.train import PremiseGeneratorTrainer, PremiseGeneratorTrainerGPT2, PremiseGeneratorTrainerBart
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -95,24 +95,27 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
                       model_name_decoder=decoder_model_name, model_path=model_path)
 
-    # model.to(device)
-
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
-    # print(model)
+    
     optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
-
+    num_steps = batches if batches > 0 else len(dl_train) // bs_train
+    num_steps = epochs * num_steps
+    print(f"Number of training steps: {num_steps}")
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=round(0.1 * num_steps), num_training_steps=num_steps)
     writer = None
     if checkpoints is None:
         writer = SummaryWriter()
 
     if model_type == 'decoder':
         trainerClass = PremiseGeneratorTrainerGPT2
+    elif model_type == 'bart':
+        trainerClass = PremiseGeneratorTrainerBart
     else:
         trainerClass = PremiseGeneratorTrainer
 
-    trainer = trainerClass(model, tokenizer, None, optimizer, max_len, labels_ids, device)
+    trainer = trainerClass(model, tokenizer, None, optimizer, scheduler, max_len, labels_ids, device)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
@@ -205,6 +208,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         writer = SummaryWriter()
     if model_type == 'decoder':
         trainerClass = PremiseGeneratorTrainerGPT2
+    elif model_type == 'bart':
+        trainerClass = PremiseGeneratorTrainerBart
     else:
         trainerClass = PremiseGeneratorTrainer
     

@@ -32,11 +32,11 @@ class PremiseGenerationDataset(Dataset):
                                                  max_length=self.max_len,
                                                  pad_to_max_length=True)
 
-        # print(input_dict)
-        # print(target_dict)
-        # kjhkhkjh
-        res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
-              [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
+        res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask']] + \
+              [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask']]
+
+        # res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
+        #       [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
 
         return tuple(res)
 
