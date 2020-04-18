@@ -61,8 +61,9 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         params_enc = list(res_model.encoder.parameters())
         params_dec = list(res_model.decoder.parameters())
 
-        freeze_params(params_enc, 0.5)
-        freeze_params(params_dec, 0.5)
+        param_freezing_ratio = 1
+        freeze_params(params_enc, param_freezing_ratio)
+        freeze_params(params_dec, param_freezing_ratio)
 
         return res_model
     

@@ -103,6 +103,18 @@ class Trainer(abc.ABC):
 
             if not best_acc:
                 best_acc = -1
+            # Unfreezing one layer
+            def unfreezing_one_layer(params):
+                last_param = None
+                for param in params:
+                    if param.requires_grad == True:
+                        break
+                    last_param = param
+                if last_param is not None:
+                    last_param.requires_grad = True
+            unfreezing_one_layer(self.model.encoder.parameters())
+            unfreezing_one_layer(self.model.decoder.parameters())
+            ######################################################
             train_result = self.train_epoch(dl_train, **kw)
             train_loss.append(torch.tensor(train_result.losses).mean().item())
             train_acc.append(train_result.accuracy)
@@ -119,7 +131,7 @@ class Trainer(abc.ABC):
                 writer.add_scalar('Loss/test', test_loss[-1], epoch)
                 writer.add_scalar('Accuracy/test', test_acc[-1], epoch)
 
-            if early_stopping and test_acc[-1] < best_acc:
+            if early_stopping and test_acc[-1] <= best_acc:
                 epochs_without_improvement += 1
                 if epochs_without_improvement >= early_stopping:
                     break

@@ -213,7 +213,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     else:
         trainerClass = PremiseGeneratorTrainer
     
-    trainer = trainerClass(model, tokenizer, None, None, max_len, labels_ids, device)
+    trainer = trainerClass(model, tokenizer, None, None, None, max_len, labels_ids, device)
     fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_labels is not None and hard_test_lines is not None:
