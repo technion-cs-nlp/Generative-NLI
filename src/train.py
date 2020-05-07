@@ -31,11 +31,11 @@ class Trainer(abc.ABC):
         :param device: torch.device to run training on (CPU or GPU).
         """
         self.model = model
-        self.loss_fn = loss_fn
+        # self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.device = device
-        self.batch_idx = 0
+        # self.batch_idx = 0
         self.epoch = 0
         model.to(self.device)
 
@@ -86,7 +86,7 @@ class Trainer(abc.ABC):
                 train_acc = saved_state.get('train_acc', train_acc)
                 test_loss = saved_state.get('test_loss', test_loss)
                 test_acc = saved_state.get('test_acc', test_acc)
-                writer = saved_state.get('writer', writer)
+                # writer = saved_state.get('writer', writer)
                 actual_num_epochs = saved_state.get('ane', actual_num_epochs)
                 # print(f"Loading model from {model_filename}")
                 # self.model = AutoModel.from_pretrained(model_filename)
@@ -112,8 +112,8 @@ class Trainer(abc.ABC):
                     last_param = param
                 if last_param is not None:
                     last_param.requires_grad = True
-            unfreezing_one_layer(self.model.encoder.parameters())
-            unfreezing_one_layer(self.model.decoder.parameters())
+            # unfreezing_one_layer(self.model.encoder.parameters())
+            # unfreezing_one_layer(self.model.decoder.parameters())
             ######################################################
             train_result = self.train_epoch(dl_train, **kw)
             train_loss.append(torch.tensor(train_result.losses).mean().item())
@@ -157,12 +157,15 @@ class Trainer(abc.ABC):
                                train_acc=train_acc,
                                test_loss=test_loss,
                                test_acc=test_acc,
-                               writer=writer,
+                            #    writer=writer,
                                ane=actual_num_epochs
                                )
                 torch.save(saved_state, checkpoint_filename)
                 print(f'*** Saved checkpoint {checkpoint_filename} '
                     f'at epoch {epoch + 1}')
+                # self.model.save_pretrained(model_filename)
+                if not os.path.isdir(model_filename):
+                    os.makedirs(model_filename)
                 self.model.save_pretrained(model_filename)
                 if writer is not None:
                     writer.add_scalar('Loss/train', train_loss[-1], epoch)
@@ -346,24 +349,28 @@ class PremiseGeneratorTrainer(Trainer):
 
         model_kwargs = {
             # "encoder_token_type_ids": encoder_token_type_ids,
-            "encoder_attention_mask": encoder_attention_mask,
+            "attention_mask": encoder_attention_mask,
             # "decoder_token_type_ids": decoder_token_type_ids,
             "decoder_attention_mask": decoder_attention_mask,
             # "decoder_lm_labels": decoder_labels
-            "decoder_lm_labels": y
+            "lm_labels": y
         }
 
         self.optimizer.zero_grad()
 
-        outputs = self.model(x, y, **model_kwargs)
+        outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
 
         loss = outputs[0]
-        loss = loss.clone().mean()
+        loss = loss.mean()
         loss.backward()
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
-        self.scheduler.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
+
+        del x, y, encoder_attention_mask, decoder_attention_mask
+        torch.cuda.empty_cache()
 
         num_correct = 0
         if return_acc:
@@ -377,10 +384,10 @@ class PremiseGeneratorTrainer(Trainer):
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, y, decoder_attention_mask = batch
         # x = x.to(self.device)
-        y = y.to(self.device)
-        encoder_attention_mask = encoder_attention_mask.to(self.device)
-        # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
-        decoder_attention_mask = decoder_attention_mask.to(self.device)
+        # y = y.to(self.device)
+        # encoder_attention_mask = encoder_attention_mask.to(self.device)
+        # # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
+        # decoder_attention_mask = decoder_attention_mask.to(self.device)
         # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
 
         correct_labels = x[:, 1].clone()
@@ -397,7 +404,7 @@ class PremiseGeneratorTrainer(Trainer):
         inp_d_a_m = []
 
         for label_id in self.labels:
-            curr_x = x.clone().to(self.device)
+            curr_x = x.clone()
             curr_x[:, 1] = label_id
             inp_x.append(curr_x)
             inp_y.append(y.clone())
@@ -409,16 +416,22 @@ class PremiseGeneratorTrainer(Trainer):
         inp_e_a_m = torch.cat(inp_e_a_m)
         inp_d_a_m = torch.cat(inp_d_a_m)
 
+        inp_x = inp_x.to(self.device)
+        inp_y = inp_y.to(self.device)
+        inp_e_a_m = inp_e_a_m.to(self.device)
+        inp_d_a_m = inp_d_a_m.to(self.device)
+
         model_kwargs = {
             # "encoder_token_type_ids": encoder_token_type_ids,
-            "encoder_attention_mask": inp_e_a_m,
+            "attention_mask": inp_e_a_m,
             # "decoder_token_type_ids": decoder_token_type_ids,
             "decoder_attention_mask": inp_d_a_m,
-            "decoder_lm_labels": inp_y
+            "lm_labels": inp_y
         }
         with torch.no_grad():
-            outputs = self.model(inp_x, inp_y, **model_kwargs)
+            outputs = self.model(input_ids=inp_x, decoder_input_ids=inp_y, **model_kwargs)
             loss = outputs[0]
+            # import pdb; pdb.set_trace()
             loss = loss.view(inp_x.size(0), -1)
 
         loss = loss.mean(dim=1)
@@ -428,6 +441,10 @@ class PremiseGeneratorTrainer(Trainer):
                 curr_loss = loss[i * batch_size + j]
                 if loss[i * batch_size + j] < best_res[j][0]:
                     best_res[j] = (curr_loss, self.labels[i])
+                
+        # del x, y, encoder_attention_mask, decoder_attention_mask
+        del inp_x, inp_y, inp_d_a_m, inp_e_a_m
+        torch.cuda.empty_cache()
 
         total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
 
@@ -437,11 +454,13 @@ class PremiseGeneratorTrainer(Trainer):
         # import pdb; pdb.set_trace()
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
-        return BatchResult(total_loss.item(), num_correct.item())
+        tot = total_loss.item()
+
+        return BatchResult(tot, num_correct.item())
 
 
 class PremiseGeneratorTrainerBart(Trainer):
-    def __init__(self, model, tokenizer, loss_fn, optimizer, max_len=128, possible_labels_ids=None, device=None):
+    def __init__(self, model, tokenizer, loss_fn, optimizer, scheduler=None, max_len=128, possible_labels_ids=None, device=None):
         super().__init__(model, loss_fn, optimizer, device)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
@@ -476,7 +495,7 @@ class PremiseGeneratorTrainerBart(Trainer):
         self.optimizer.zero_grad()
 
         outputs = self.model(x, **model_kwargs)
-
+        # import pdb; pdb.set_trace()
         loss = outputs[0]
         loss = loss.clone().mean()
         loss.backward()

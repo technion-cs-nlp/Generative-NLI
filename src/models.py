@@ -1,7 +1,5 @@
 import torch.nn as nn
 import os
-from transformers import BertForMaskedLM, PreTrainedEncoderDecoder, BertModel, \
-    GPT2LMHeadModel, AutoConfig, AutoTokenizer, BartForConditionalGeneration
 
 
 class PremiseGeneratorHybrid(nn.Module):
@@ -35,35 +33,40 @@ class PremiseGeneratorHybrid(nn.Module):
 
 def freeze_params(params, ratio):
     for idx, param in enumerate(params):
-        if idx > len(params) * ratio:
+        if idx >= len(params) * ratio:
             break
         param.requires_grad = False
 
 def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, model_name_decoder=None, 
-            model_path=None):
+            model_path=None, param_freezing_ratio=0.0):
     res_model = None
     if tokenizer is None:
+        from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
     model_list = ['masked', 'encode-decode', 'hybrid', 'decoder', 'bart']
-
+    # import pdb; pdb.set_trace()
     if model == 'encode-decode':
+        from transformers import EncoderDecoderModel, AutoConfig
         encoder_model_name, decoder_model_name = \
                         (os.path.join(model_path,'encoder'), os.path.join(model_path,'decoder')) \
                         if model_path is not None else (model_name, model_name)
 
         decoder_config = AutoConfig.from_pretrained(decoder_model_name, is_decoder=True)
-        res_model = PreTrainedEncoderDecoder.from_pretrained(encoder_model_name, decoder_model_name,
-                                                                decoder_config=decoder_config)
-
+        res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name)
+        # res_model = EncoderDecoderModel.from_encoder_decoder_pretrained('bert-base-uncased', 'bert-base-uncased')
+        # config_encoder = BertConfig()
+        # conf = EncoderDecoderConfig.from_encoder_decoder_configs(config_encoder, decoder_config)
+        # res_model = EncoderDecoderModel(config=conf)
         res_model.encoder.resize_token_embeddings(len(tokenizer))
         res_model.decoder.resize_token_embeddings(len(tokenizer))
 
-        params_enc = list(res_model.encoder.parameters())
-        params_dec = list(res_model.decoder.parameters())
+        # params_enc = list(res_model.encoder.parameters())
+        # params_dec = list(res_model.decoder.parameters())
 
-        param_freezing_ratio = 1
-        freeze_params(params_enc, param_freezing_ratio)
-        freeze_params(params_dec, param_freezing_ratio)
+        # # param_freezing_ratio = 1
+        # if model_path is None:
+        #     freeze_params(params_enc, param_freezing_ratio)
+        #     freeze_params(params_dec, param_freezing_ratio)
 
         return res_model
     
@@ -71,16 +74,20 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         model_name = model_path if model_path is not None else model_name
 
     if model  == 'bart':
+        from transformers import BartForConditionalGeneration
         res_model = BartForConditionalGeneration.from_pretrained(model_name)
 
-    if model == 'masked':
+    elif model == 'masked':
+        from transformers import BertForMaskedLM
         res_model = BertForMaskedLM.from_pretrained(model_name)
 
     elif model == 'hybrid':
+        from transformers import AutoTokenizer
         decoder_tokenizer = AutoTokenizer.from_pretrained(model_name_decoder)
         res_model = PremiseGeneratorHybrid(model_name, model_name_decoder, [tokenizer, decoder_tokenizer])
 
     elif model == 'decoder':
+        from transformers import GPT2LMHeadModel
         res_model = GPT2LMHeadModel.from_pretrained(model_name)
 
     else: 

@@ -7,7 +7,8 @@ import sys
 import torch
 import torchvision
 from torch.utils.data import DataLoader, Subset
-from transformers import AutoTokenizer, AdamW, AutoModel, PreTrainedEncoderDecoder, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, AdamW, AutoModel, \
+get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup
 
 from src.data import PremiseGenerationDataset
 from src.models import get_model
@@ -24,7 +25,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    bs_train=32, bs_test=None, batches=100, epochs=100,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0,
                    # Model params
-                   beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0,
+                   beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -93,7 +94,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
-                      model_name_decoder=decoder_model_name, model_path=model_path)
+                      model_name_decoder=decoder_model_name, model_path=model_path, param_freezing_ratio=param_freezing_ratio)
 
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
@@ -104,16 +105,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     num_steps = epochs * num_steps
     print(f"Number of training steps: {num_steps}")
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=round(0.1 * num_steps), num_training_steps=num_steps)
-    writer = None
-    if checkpoints is None:
-        writer = SummaryWriter()
+    writer = SummaryWriter()
 
-    if model_type == 'decoder':
-        trainerClass = PremiseGeneratorTrainerGPT2
-    elif model_type == 'bart':
-        trainerClass = PremiseGeneratorTrainerBart
-    else:
-        trainerClass = PremiseGeneratorTrainer
+    # if model_type == 'decoder':
+    #     trainerClass = PremiseGeneratorTrainerGPT2
+    # elif model_type == 'bart':
+    #     trainerClass = PremiseGeneratorTrainerBart
+    # else:
+    #     trainerClass = PremiseGeneratorTrainer
+
+    trainerClass = PremiseGeneratorTrainer
 
     trainer = trainerClass(model, tokenizer, None, optimizer, scheduler, max_len, labels_ids, device)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
@@ -289,6 +290,8 @@ def parse_cli():
                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
     sp_exp.add_argument('--max-len', type=int,
                         help='Length of longest sequence (or bigger), 0 if you don\'t know', default=0)
+    sp_exp.add_argument('--param-freezing-ratio', type=float,
+                        help='How many of the params to freeze', default=0.0)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -358,6 +361,7 @@ def parse_cli():
 # run_experiment("dimi", data_dir_prefix="../data/scitail/cl_scitail", bs_train=8, bs_test=4)
 
 if __name__ == '__main__':
+    torch.cuda.empty_cache()
     parsed_args = parse_cli()
     subcmd_fn = parsed_args.subcmd_fn
     del parsed_args.subcmd_fn
