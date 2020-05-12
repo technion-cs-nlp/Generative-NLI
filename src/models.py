@@ -57,8 +57,9 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         # config_encoder = BertConfig()
         # conf = EncoderDecoderConfig.from_encoder_decoder_configs(config_encoder, decoder_config)
         # res_model = EncoderDecoderModel(config=conf)
-        res_model.encoder.resize_token_embeddings(len(tokenizer))
-        res_model.decoder.resize_token_embeddings(len(tokenizer))
+        if model_path is None:
+            res_model.encoder.resize_token_embeddings(len(tokenizer))
+            res_model.decoder.resize_token_embeddings(len(tokenizer))
 
         # params_enc = list(res_model.encoder.parameters())
         # params_dec = list(res_model.decoder.parameters())
@@ -75,6 +76,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
     if model  == 'bart':
         from transformers import BartForConditionalGeneration
+        # import pdb; pdb.set_trace()
         res_model = BartForConditionalGeneration.from_pretrained(model_name)
 
     elif model == 'masked':
@@ -93,6 +95,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     else: 
         print(f"Please pick a valid model in {model_list}")
 
-    res_model.resize_token_embeddings(len(tokenizer))
+    if model_path is None:          ## only change embeddings size if its not a trained model
+        res_model.resize_token_embeddings(len(tokenizer))
         
     return res_model
