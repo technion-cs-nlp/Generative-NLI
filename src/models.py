@@ -78,6 +78,8 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         from transformers import BartForConditionalGeneration
         # import pdb; pdb.set_trace()
         res_model = BartForConditionalGeneration.from_pretrained(model_name)
+        if model_path is None and param_freezing_ratio > 0:
+            freeze_params(list(res_model.parameters()), param_freezing_ratio)
 
     elif model == 'masked':
         from transformers import BertForMaskedLM
