@@ -302,7 +302,7 @@ class Trainer(abc.ABC):
             dl_iter = iter(dl)
             for batch_idx in range(num_batches):
                 data = next(dl_iter)
-                if batch_idx == num_batches - 1:
+                if batch_idx%1000 == 0:         # calculate acuuracy for train each 1000 epochs
                     return_acc = True
 
                 batch_res = forward_fn(data)
