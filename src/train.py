@@ -114,6 +114,7 @@ class Trainer(abc.ABC):
                     last_param.requires_grad = True
             # unfreezing_one_layer(self.model.encoder.parameters())
             # unfreezing_one_layer(self.model.decoder.parameters())
+            unfreezing_one_layer(self.model.parameters())
             ######################################################
             train_result = self.train_epoch(dl_train, **kw)
             train_loss.append(torch.tensor(train_result.losses).mean().item())
