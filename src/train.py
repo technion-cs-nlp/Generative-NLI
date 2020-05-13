@@ -114,7 +114,7 @@ class Trainer(abc.ABC):
                     last_param.requires_grad = True
             # unfreezing_one_layer(self.model.encoder.parameters())
             # unfreezing_one_layer(self.model.decoder.parameters())
-            unfreezing_one_layer(self.model.parameters())
+            # unfreezing_one_layer(self.model.parameters())
             ######################################################
             train_result = self.train_epoch(dl_train, **kw)
             train_loss.append(torch.tensor(train_result.losses).mean().item())
@@ -315,7 +315,7 @@ class Trainer(abc.ABC):
                 num_correct += batch_res.num_correct
 
             avg_loss = sum(losses) / num_batches
-            num = num_samples if mode == 'test' else num_samples / num_batches
+            num = num_samples if mode == 'test' else (num_samples / num_batches)*round(num_batches/1000)
             accuracy = 100. * num_correct / num
             pbar.set_description(f'{pbar_name} '
                                  f'(Avg. Loss {avg_loss:.3f}, '
