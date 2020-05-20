@@ -23,7 +23,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    drive=False, do_test=True,
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
-                   early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0,
+                   early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    **kw):
@@ -59,9 +59,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             hard_test_lines = val_lines_file.readlines()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer_decoder = None
+    if decoder_model_name is not None:
+        tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
+        tokenizer_decoder.pad_token = tokenizer_decoder.eos_token
 
-    size_test = batches * bs_test if batches > 0 else -1
-    size_train = batches * bs_train if batches > 0 else -1
+    size_test = batches * bs_test if batches > 0 else 10**8
+    size_train = batches * bs_train if batches > 0 else 10**8
 
     if max_len == 0:
         max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
@@ -70,6 +74,18 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
     max_len = int(max_len)
 
+    if decoder_max_len == 0:
+        if tokenizer_decoder is not None:
+            decoder_max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
+                              '|||', tokenizer_decoder)
+            print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
+            decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
+        else:
+            decoder_max_len = max_len
+    decoder_max_len = int(decoder_max_len)
+
+    max_len = max(max_len, decoder_max_len)
+    
     print(f'Setting max_len to: {max_len}')
 
     all_labels_text = list(set(test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
@@ -77,14 +93,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
     tokenizer.add_tokens(all_labels)
-
     labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-
     print(f'Labels IDs: {labels_ids}')
+    if tokenizer_decoder is not None:
+        tokenizer_decoder.add_tokens(all_labels)
+        labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
-    ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, max_len=max_len)
-    ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, max_len=max_len)
-    ds_train = PremiseGenerationDataset(train_lines, train_labels, tokenizer, max_len=max_len)
+    ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
+    ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
+    ds_train = PremiseGenerationDataset(train_lines, train_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
@@ -93,8 +111,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
-                      model_name_decoder=decoder_model_name, model_path=model_path, param_freezing_ratio=param_freezing_ratio)
+    model = get_model(  tokenizer=tokenizer, 
+                        tokenizer_decoder=tokenizer_decoder, 
+                        model=model_type, 
+                        model_name=model_name,
+                        decoder_model_name=decoder_model_name, 
+                        model_path=model_path, 
+                        param_freezing_ratio=param_freezing_ratio)
 
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
@@ -288,8 +311,10 @@ def parse_cli():
                         help='L2 regularization', default=1e-3)
     sp_exp.add_argument('--data-dir-prefix', type=str,
                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
-    sp_exp.add_argument('--max-len', type=int,
+    sp_exp.add_argument('--max-len', '-ml', type=int,
                         help='Length of longest sequence (or bigger), 0 if you don\'t know', default=0)
+    sp_exp.add_argument('--decoder-max-len', '-dml', type=int,
+                        help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
     sp_exp.add_argument('--param-freezing-ratio', type=float,
                         help='How many of the params to freeze', default=0.0)
 
@@ -301,7 +326,7 @@ def parse_cli():
     sp_exp.add_argument('--model-type', type=str,
                         help='Type of the model (encode-decode or hybrid)', default='encode-decode')
     sp_exp.add_argument('--decoder-model-name', type=str,
-                        help='Only if model type is hybrid', default='gpt2')
+                        help='Name of the decoder, if empty then same as encoder', default=None)
     sp_exp.add_argument('--beta1', '-b1', type=float,
                         default=0.9)
     sp_exp.add_argument('--beta2', '-b2', type=float,
