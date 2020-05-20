@@ -303,7 +303,7 @@ class Trainer(abc.ABC):
             dl_iter = iter(dl)
             for batch_idx in range(num_batches):
                 data = next(dl_iter)
-                if batch_idx%1000 == 0:         # calculate acuuracy for train each 1000 epochs
+                if batch_idx == num_batches-1:         # calculate acuuracy for train each 1000 epochs
                     return_acc = True
 
                 batch_res = forward_fn(data)
@@ -315,7 +315,7 @@ class Trainer(abc.ABC):
                 num_correct += batch_res.num_correct
 
             avg_loss = sum(losses) / num_batches
-            num = num_samples if mode == 'test' else (num_samples / num_batches)*round(num_batches/1000)
+            num = num_samples if mode == 'test' else (num_samples / num_batches)
             accuracy = 100. * num_correct / num
             pbar.set_description(f'{pbar_name} '
                                  f'(Avg. Loss {avg_loss:.3f}, '
@@ -340,13 +340,14 @@ class PremiseGeneratorTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = batch
+        x, encoder_attention_mask, y, decoder_attention_mask, _ = batch
         x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
         # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
         # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
+        # decoder_encoder_attention_mask = decoder_encoder_attention_mask.to(self.device)
 
         model_kwargs = {
             # "encoder_token_type_ids": encoder_token_type_ids,
@@ -354,6 +355,7 @@ class PremiseGeneratorTrainer(Trainer):
             # "decoder_token_type_ids": decoder_token_type_ids,
             "decoder_attention_mask": decoder_attention_mask,
             # "decoder_lm_labels": decoder_labels
+            # "decoder_encoder_attention_mask": decoder_encoder_attention_mask,
             "lm_labels": y
         }
 
@@ -383,7 +385,7 @@ class PremiseGeneratorTrainer(Trainer):
         return BatchResult(loss.item(), num_correct)
 
     def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = batch
+        x, encoder_attention_mask, y, decoder_attention_mask, _ = batch
         # x = x.to(self.device)
         # y = y.to(self.device)
         # encoder_attention_mask = encoder_attention_mask.to(self.device)
@@ -403,30 +405,35 @@ class PremiseGeneratorTrainer(Trainer):
         inp_y = []
         inp_e_a_m = []
         inp_d_a_m = []
+        # inp_d_e_a_m = []
 
         for label_id in self.labels:
             curr_x = x.clone()
             curr_x[:, 1] = label_id
             inp_x.append(curr_x)
-            inp_y.append(y.clone())
-            inp_e_a_m.append(encoder_attention_mask.clone())
-            inp_d_a_m.append(decoder_attention_mask.clone())
+            inp_y.append(y)
+            inp_e_a_m.append(encoder_attention_mask)
+            inp_d_a_m.append(decoder_attention_mask)
+            # inp_d_e_a_m.append(decoder_encoder_attention_mask)
 
         inp_x = torch.cat(inp_x)
         inp_y = torch.cat(inp_y)
         inp_e_a_m = torch.cat(inp_e_a_m)
         inp_d_a_m = torch.cat(inp_d_a_m)
+        # inp_d_e_a_m = torch.cat(inp_d_e_a_m)
 
         inp_x = inp_x.to(self.device)
         inp_y = inp_y.to(self.device)
         inp_e_a_m = inp_e_a_m.to(self.device)
         inp_d_a_m = inp_d_a_m.to(self.device)
+        # inp_d_e_a_m = inp_d_e_a_m.to(self.device)
 
         model_kwargs = {
             # "encoder_token_type_ids": encoder_token_type_ids,
             "attention_mask": inp_e_a_m,
             # "decoder_token_type_ids": decoder_token_type_ids,
             "decoder_attention_mask": inp_d_a_m,
+            # "decoder_encoder_attention_mask": inp_d_e_a_m,
             "lm_labels": inp_y
         }
         with torch.no_grad():

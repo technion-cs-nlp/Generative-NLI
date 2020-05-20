@@ -37,37 +37,35 @@ def freeze_params(params, ratio):
             break
         param.requires_grad = False
 
-def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None, model_name_decoder=None, 
+def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None,
+            tokenizer_decoder=None, decoder_model_name=None, 
             model_path=None, param_freezing_ratio=0.0):
     res_model = None
     if tokenizer is None:
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
     model_list = ['masked', 'encode-decode', 'hybrid', 'decoder', 'bart']
-    # import pdb; pdb.set_trace()
     if model == 'encode-decode':
-        from transformers import EncoderDecoderModel, AutoConfig
+        from transformers import EncoderDecoderModel, AutoConfig, EncoderDecoderConfig
+        if decoder_model_name is None:
+            decoder_model_name = model_name
         encoder_model_name, decoder_model_name = \
                         (os.path.join(model_path,'encoder'), os.path.join(model_path,'decoder')) \
-                        if model_path is not None else (model_name, model_name)
+                        if model_path is not None else (model_name, decoder_model_name)
 
-        decoder_config = AutoConfig.from_pretrained(decoder_model_name, is_decoder=True)
-        res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name)
-        # res_model = EncoderDecoderModel.from_encoder_decoder_pretrained('bert-base-uncased', 'bert-base-uncased')
-        # config_encoder = BertConfig()
-        # conf = EncoderDecoderConfig.from_encoder_decoder_configs(config_encoder, decoder_config)
-        # res_model = EncoderDecoderModel(config=conf)
+        if tokenizer_decoder is None:
+            from transformers import AutoTokenizer
+            tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
+
+        config_decoder = AutoConfig.from_pretrained(decoder_model_name, is_decoder=True)
+        config_encoder = AutoConfig.from_pretrained(encoder_model_name, is_decoder=False)
+        config = EncoderDecoderConfig.from_encoder_decoder_configs(config_encoder, config_decoder)
+       
+        res_model = EncoderDecoderModel(config=config)
+
         if model_path is None:
             res_model.encoder.resize_token_embeddings(len(tokenizer))
-            res_model.decoder.resize_token_embeddings(len(tokenizer))
-
-        # params_enc = list(res_model.encoder.parameters())
-        # params_dec = list(res_model.decoder.parameters())
-
-        # # param_freezing_ratio = 1
-        # if model_path is None:
-        #     freeze_params(params_enc, param_freezing_ratio)
-        #     freeze_params(params_dec, param_freezing_ratio)
+            res_model.decoder.resize_token_embeddings(len(tokenizer_decoder))
 
         return res_model
     
