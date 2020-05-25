@@ -54,8 +54,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
                         if model_path is not None else (model_name, decoder_model_name)
 
         if tokenizer_decoder is None:
-            from transformers import AutoTokenizer
-            tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
+            tokenizer_decoder = tokenizer
 
         config_decoder = AutoConfig.from_pretrained(decoder_model_name, is_decoder=True)
         config_encoder = AutoConfig.from_pretrained(encoder_model_name, is_decoder=False)
