@@ -158,7 +158,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name='gpt2', seed=None,
                # Training params
                bs_test=None, batches=100,
-               checkpoints=None, max_len=0,
+               checkpoints=None, max_len=0, decoder_max_len=0,
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -188,27 +188,43 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             hard_test_lines = val_lines_file.readlines()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer_decoder = None
+    if decoder_model_name is not None:
+        tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
+        tokenizer_decoder.pad_token = tokenizer_decoder.eos_token
 
-    size_test = batches * bs_test if batches > 0 else -1
+    size_test = batches * bs_test if batches > 0 else 10**8
 
     if max_len == 0:
-        max_len = get_max_len(test_lines[:size_test],
-                              '|||', tokenizer)
+        max_len = get_max_len(test_lines[:size_test],'|||', tokenizer)
         print(f'Longest Sequence is: {max_len} token_ids')
         max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
     max_len = int(max_len)
 
+    if decoder_max_len == 0:
+        if tokenizer_decoder is not None:
+            decoder_max_len = get_max_len(test_lines[:size_test] + val_lines[:size_test] + hard_test_lines[:size_test],
+                              '|||', tokenizer_decoder)
+            print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
+            decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
+        else:
+            decoder_max_len = max_len
+    decoder_max_len = int(decoder_max_len)
+
+    max_len = max(max_len, decoder_max_len)
+
     print(f'Setting max_len to: {max_len}')
 
     all_labels_text = list(set(test_labels[:size_test]))
-
     all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
-
     tokenizer.add_tokens(all_labels)
-
     labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-
     print(f'Labels IDs: {labels_ids}')
+
+    if tokenizer_decoder is not None:
+        tokenizer_decoder.add_tokens(all_labels)
+        labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
     ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, max_len=max_len)
     ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, max_len=max_len)
@@ -219,7 +235,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = get_model(tokenizer=tokenizer, model=model_type, model_name=model_name,
+    model = get_model(tokenizer=tokenizer, tokenizer_decoder=tokenizer_decoder, model=model_type, model_name=model_name,
                             model_name_decoder=decoder_model_name, model_path=model_path)
 
     # model.to(device)
@@ -241,7 +257,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_labels is not None and hard_test_lines is not None:
-            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len)
+            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
             dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
@@ -353,7 +369,7 @@ def parse_cli():
     sp_test.add_argument('--drive', '-d', type=bool, help='Pass "True" if you are running this on Google Colab',
                          default=False, required=False)
 
-    # # Training
+    # # Inference
     sp_test.add_argument('--bs-test', type=int, help='Test batch size',
                          metavar='BATCH_SIZE')
     sp_test.add_argument('--batches', type=int,
@@ -362,7 +378,9 @@ def parse_cli():
                          help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
     sp_test.add_argument('--max-len', type=int,
                          help='Length of longest sequence (or bigger), 0 if you don\'t know', default=0)
-
+    sp_test.add_argument('--decoder-max-len', '-dml', type=int,
+                        help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
+    
     # # Model
     sp_test.add_argument('--model-name', type=str,
                          help='Name of the huggingface model', default='bert-base-uncased')
