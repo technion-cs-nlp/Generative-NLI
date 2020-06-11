@@ -12,7 +12,7 @@ get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_war
 
 from src.data import PremiseGenerationDataset
 from src.models import get_model
-from src.train import PremiseGeneratorTrainer, PremiseGeneratorTrainerGPT2, PremiseGeneratorTrainerBart
+from src.train import PremiseGeneratorTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -89,7 +89,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     print(f'Setting max_len to: {max_len}')
 
     all_labels_text = list(set(test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
-
+    all_labels_text.sort()
     all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
     tokenizer.add_tokens(all_labels)
@@ -119,7 +119,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                         model_path=model_path, 
                         param_freezing_ratio=param_freezing_ratio)
 
-    dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False)
+    dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
     
@@ -130,16 +130,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=round(0.1 * num_steps), num_training_steps=num_steps)
     writer = SummaryWriter()
 
-    # if model_type == 'decoder':
-    #     trainerClass = PremiseGeneratorTrainerGPT2
-    # elif model_type == 'bart':
-    #     trainerClass = PremiseGeneratorTrainerBart
-    # else:
-    #     trainerClass = PremiseGeneratorTrainer
-
-    trainerClass = PremiseGeneratorTrainer
-
-    trainer = trainerClass(model, tokenizer, None, optimizer, scheduler, max_len, labels_ids, device)
+    trainer = PremiseGeneratorTrainer(model, optimizer, scheduler, max_len, labels_ids, device)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
@@ -147,7 +138,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if do_test:
         trainer.test(dl_test,writer=writer)
         if len(hard_test_labels) > 0 and len(hard_test_lines) > 0:
-            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len)
+            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
             dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
@@ -155,7 +146,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
 
 def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_1.0/cl_snli',
-               model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name='gpt2', seed=None,
+               model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name=None, seed=None,
                # Training params
                bs_test=None, batches=100,
                checkpoints=None, max_len=0, decoder_max_len=0,
@@ -186,7 +177,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             hard_test_labels = val_labels_file.readlines()
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
-
+    # import pdb; pdb.set_trace()
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer_decoder = None
     if decoder_model_name is not None:
@@ -216,6 +207,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     print(f'Setting max_len to: {max_len}')
 
     all_labels_text = list(set(test_labels[:size_test]))
+    # import pdb; pdb.set_trace()
+    all_labels_text.sort()
+    # all_labels_text.reverse()
     all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
     tokenizer.add_tokens(all_labels)
     labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
@@ -226,8 +220,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
         print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
-    ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, max_len=max_len)
-    ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, max_len=max_len)
+    ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
+    ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
@@ -236,7 +230,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = get_model(tokenizer=tokenizer, tokenizer_decoder=tokenizer_decoder, model=model_type, model_name=model_name,
-                            model_name_decoder=decoder_model_name, model_path=model_path)
+                            decoder_model_name=decoder_model_name, model_path=model_path)
 
     # model.to(device)
                             
@@ -246,14 +240,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     writer = None
     if checkpoints is None:
         writer = SummaryWriter()
-    if model_type == 'decoder':
-        trainerClass = PremiseGeneratorTrainerGPT2
-    elif model_type == 'bart':
-        trainerClass = PremiseGeneratorTrainerBart
-    else:
-        trainerClass = PremiseGeneratorTrainer
     
-    trainer = trainerClass(model, tokenizer, None, None, None, max_len, labels_ids, device)
+    trainer = PremiseGeneratorTrainer(model, None, None, max_len, labels_ids, device)
     fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_labels is not None and hard_test_lines is not None:
@@ -261,7 +249,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
             dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
-            trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
+            fit_res = trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
+            save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
 
 
 def save_experiment(run_name, out_dir, config, fit_res):
@@ -321,8 +310,8 @@ def parse_cli():
     sp_exp.add_argument('--checkpoints', type=str,
                         help='Save model checkpoints to this file when test '
                              'accuracy improves', default=None)
-    sp_exp.add_argument('--lr', type=float,
-                        help='Learning rate', default=0.001)
+    sp_exp.add_argument('--lr', '-lr', type=float,
+                        help='Learning rate', default=1e-5)
     sp_exp.add_argument('--reg', type=float,
                         help='L2 regularization', default=1e-3)
     sp_exp.add_argument('--data-dir-prefix', type=str,
@@ -391,7 +380,7 @@ def parse_cli():
     sp_test.add_argument('--checkpoints', type=str,
                          help='Checkpoint to torch model', default=None)
     sp_test.add_argument('--decoder-model-name', type=str,
-                         help='Only if model type is hybrid', default='gpt2')
+                         help='Only if encoder and decoder are different', default=None)
 
     parsed = p.parse_args()
 

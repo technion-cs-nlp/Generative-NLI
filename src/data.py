@@ -34,11 +34,6 @@ class PremiseGenerationDataset(Dataset):
                                                 max_length=self.max_len,
                                                 pad_to_max_length=True
                                                 )
-
-        decoder_encoder_attention_mask = self.tokenizer_decoder.encode_plus(sent,
-                                                max_length=self.max_len,
-                                                pad_to_max_length=True
-                                                )['attention_mask']
         # except Exception as e:
         #     print(e)
         #     print(tgt)
@@ -50,7 +45,7 @@ class PremiseGenerationDataset(Dataset):
         # res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
         #       [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
 
-        return tuple(res) + (torch.tensor(decoder_encoder_attention_mask),)
+        return tuple(res)
 
     def __len__(self):
         return self.size

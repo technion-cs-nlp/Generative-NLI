@@ -104,14 +104,13 @@ class Trainer(abc.ABC):
             if not best_acc:
                 best_acc = -1
             # Unfreezing one layer
-            def unfreezing_one_layer(params):
-                last_param = None
-                for param in params:
-                    if param.requires_grad == True:
-                        break
-                    last_param = param
-                if last_param is not None:
-                    last_param.requires_grad = True
+            def freeze_remaining_layers(params, unfreezing_ratio):
+                params = list(params)
+                num_params = len(params)
+                for idx, param in enumerate(params):
+                    if idx > num_params * unfreezing_ratio:
+                        return
+                    param.requires_grad = False
             # unfreezing_one_layer(self.model.encoder.parameters())
             # unfreezing_one_layer(self.model.decoder.parameters())
             # unfreezing_one_layer(self.model.parameters())
@@ -286,6 +285,7 @@ class Trainer(abc.ABC):
         num_correct = 0
         num_samples = len(dl.sampler)
         num_batches = len(dl.batch_sampler)
+        
 
         if max_batches is not None:
             if max_batches < num_batches:
@@ -326,41 +326,59 @@ class Trainer(abc.ABC):
 
 
 class PremiseGeneratorTrainer(Trainer):
-    def __init__(self, model, tokenizer, loss_fn, optimizer, scheduler, max_len=128, possible_labels_ids=None, device=None):
-        super().__init__(model, loss_fn, optimizer, scheduler, device)
+    def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None, device=None):
+        super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
-        self.tokenizer = tokenizer
-        self.labels = possible_labels_ids
+        # self.tokenizer = tokenizer
         self.max_len = max_len
+        self.last_freeze_loss = None
+        self.freeze_ratio = 0.0
+        self.num_layers = len(list(self.model.modules()))
+        self.labels = possible_labels_ids
+
+    def freeze_remaining_layers(self):
+        for idx, layer in enumerate(self.model.modules()):
+            if idx > self.num_layers * self.freeze_ratio:
+                return
+            layer.requires_grad = False
+
+    def unfreeze_all(self):
+        for layer in self.model.modules():
+            layer.requires_grad = True
+
+    def freeze_all(self):
+        for layer in self.model.modules():
+            layer.requires_grad = False
+
+    def unfreeze_one_layer(self):
+        last_layer = None
+        for layer in self.model.modules():
+            if layer.requires_grad == True and last_layer is not None:
+                last_layer.requires_grad = True
+                return
+            last_layer = layer
 
     def train_epoch(self, dl_train: DataLoader, **kw):
-        return super().train_epoch(dl_train, **kw)
+        res = super().train_epoch(dl_train, **kw)
+        return res
 
     def test_epoch(self, dl_test: DataLoader, **kw):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask, _ = batch
+        x, encoder_attention_mask, y, decoder_attention_mask = batch
         x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
-        # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
-        # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
-        # decoder_encoder_attention_mask = decoder_encoder_attention_mask.to(self.device)
 
         model_kwargs = {
-            # "encoder_token_type_ids": encoder_token_type_ids,
             "attention_mask": encoder_attention_mask,
-            # "decoder_token_type_ids": decoder_token_type_ids,
             "decoder_attention_mask": decoder_attention_mask,
-            # "decoder_lm_labels": decoder_labels
-            # "decoder_encoder_attention_mask": decoder_encoder_attention_mask,
-            "lm_labels": y
+            "labels": y
         }
 
         self.optimizer.zero_grad()
-
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
 
         loss = outputs[0]
@@ -382,16 +400,21 @@ class PremiseGeneratorTrainer(Trainer):
             num_correct = acc.num_correct
             self.model.train()
 
-        return BatchResult(loss.item(), num_correct)
+        loss = loss.item()
+
+        if self.freeze_ratio > 0.0:
+            if self.last_freeze_loss is None:
+                        self.last_freeze_loss = loss
+            elif loss <= 0.5 * self.last_freeze_loss:
+                self.last_freeze_loss = loss
+                print("Freezing half of the unfrozzen layers")
+                self.freeze_remaining_layers()
+                self.freeze_ratio = 0.5 * self.freeze_ratio + 0.5
+
+        return BatchResult(loss, num_correct)
 
     def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask, _ = batch
-        # x = x.to(self.device)
-        # y = y.to(self.device)
-        # encoder_attention_mask = encoder_attention_mask.to(self.device)
-        # # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
-        # decoder_attention_mask = decoder_attention_mask.to(self.device)
-        # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
+        x, encoder_attention_mask, y, decoder_attention_mask = batch
 
         correct_labels = x[:, 1].clone()
         total_loss = torch.zeros(1, dtype=float)
@@ -429,11 +452,8 @@ class PremiseGeneratorTrainer(Trainer):
         # inp_d_e_a_m = inp_d_e_a_m.to(self.device)
 
         model_kwargs = {
-            # "encoder_token_type_ids": encoder_token_type_ids,
             "attention_mask": inp_e_a_m,
-            # "decoder_token_type_ids": decoder_token_type_ids,
             "decoder_attention_mask": inp_d_a_m,
-            # "decoder_encoder_attention_mask": inp_d_e_a_m,
             "lm_labels": inp_y
         }
         with torch.no_grad():
@@ -441,9 +461,8 @@ class PremiseGeneratorTrainer(Trainer):
             loss = outputs[0]
             # import pdb; pdb.set_trace()
             loss = loss.view(inp_x.size(0), -1)
-
-        loss = loss.mean(dim=1)
-
+            loss = loss.mean(dim=1)
+        # import pdb; pdb.set_trace()
         for i in range(len(self.labels)):
             for j in range(batch_size):
                 curr_loss = loss[i * batch_size + j]
@@ -465,219 +484,3 @@ class PremiseGeneratorTrainer(Trainer):
         tot = total_loss.item()
 
         return BatchResult(tot, num_correct.item())
-
-
-class PremiseGeneratorTrainerBart(Trainer):
-    def __init__(self, model, tokenizer, loss_fn, optimizer, scheduler=None, max_len=128, possible_labels_ids=None, device=None):
-        super().__init__(model, loss_fn, optimizer, device)
-        # self.evaluator = evaluator
-        self.tokenizer = tokenizer
-        self.labels = possible_labels_ids
-        self.max_len = max_len
-
-    def train_epoch(self, dl_train: DataLoader, **kw):
-        return super().train_epoch(dl_train, **kw)
-
-    def test_epoch(self, dl_test: DataLoader, **kw):
-        return super().test_epoch(dl_test, **kw)
-
-    def train_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = batch
-        x = x.to(self.device)
-        y = y.to(self.device)
-        encoder_attention_mask = encoder_attention_mask.to(self.device)
-        # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
-        decoder_attention_mask = decoder_attention_mask.to(self.device)
-        # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
-
-        model_kwargs = {
-            "decoder_input_ids": y,
-            # "encoder_token_type_ids": encoder_token_type_ids,
-            "attention_mask": encoder_attention_mask,
-            # "decoder_token_type_ids": decoder_token_type_ids,
-            "decoder_attention_mask": decoder_attention_mask,
-            # "decoder_lm_labels": decoder_labels
-            "lm_labels": y
-        }
-
-        self.optimizer.zero_grad()
-
-        outputs = self.model(x, **model_kwargs)
-        # import pdb; pdb.set_trace()
-        loss = outputs[0]
-        loss = loss.clone().mean()
-        loss.backward()
-
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        self.optimizer.step()
-
-        num_correct = 0
-        if return_acc:
-            self.model.eval()  # small hack but it's working
-            acc = self.test_batch(batch)
-            num_correct = acc.num_correct
-            self.model.train()
-
-        return BatchResult(loss.item(), num_correct)
-
-    def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = batch
-        # x = x.to(self.device)
-        y = y.to(self.device)
-        encoder_attention_mask = encoder_attention_mask.to(self.device)
-        # encoder_token_type_ids = encoder_token_type_ids.to(self.device)
-        decoder_attention_mask = decoder_attention_mask.to(self.device)
-        # decoder_token_type_ids = decoder_token_type_ids.to(self.device)
-
-        correct_labels = x[:, 1].clone()
-        total_loss = torch.zeros(1, dtype=float)
-        pred = []
-
-        batch_size = x.size(0)
-
-        best_res = [(torch.tensor(1e9), -1) for _ in range(batch_size)]
-
-        inp_x = []
-        inp_y = []
-        inp_e_a_m = []
-        inp_d_a_m = []
-
-        for label_id in self.labels:
-            curr_x = x.clone().to(self.device)
-            curr_x[:, 1] = label_id
-            inp_x.append(curr_x)
-            inp_y.append(y.clone())
-            inp_e_a_m.append(encoder_attention_mask.clone())
-            inp_d_a_m.append(decoder_attention_mask.clone())
-
-        inp_x = torch.cat(inp_x)
-        inp_y = torch.cat(inp_y)
-        inp_e_a_m = torch.cat(inp_e_a_m)
-        inp_d_a_m = torch.cat(inp_d_a_m)
-
-        model_kwargs = {
-            "decoder_input_ids": inp_y,
-            # "encoder_token_type_ids": encoder_token_type_ids,
-            "attention_mask": inp_e_a_m,
-            # "decoder_token_type_ids": decoder_token_type_ids,
-            "decoder_attention_mask": inp_d_a_m,
-            "lm_labels": inp_y
-        }
-        with torch.no_grad():
-            outputs = self.model(inp_x, **model_kwargs)
-            loss = outputs[0]
-            loss = loss.view(inp_x.size(0), -1)
-
-        loss = loss.mean(dim=1)
-
-        for i in range(len(self.labels)):
-            for j in range(batch_size):
-                curr_loss = loss[i * batch_size + j]
-                if loss[i * batch_size + j] < best_res[j][0]:
-                    best_res[j] = (curr_loss, self.labels[i])
-
-        total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
-
-        pred = torch.tensor([label[1] for label in best_res])
-        pred.to('cpu')
-        correct_labels = correct_labels.to('cpu')
-        # import pdb; pdb.set_trace()
-        num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
-
-        return BatchResult(total_loss.item(), num_correct.item())
-
-
-class PremiseGeneratorTrainerGPT2(Trainer):
-    def __init__(self, model, tokenizer, loss_fn, optimizer, max_len=128, possible_labels_ids=None, device=None):
-        super().__init__(model, loss_fn, optimizer, device)
-        # self.evaluator = evaluator
-        self.tokenizer = tokenizer
-        self.labels = possible_labels_ids
-        self.max_len = max_len
-
-    def train_epoch(self, dl_train: DataLoader, **kw):
-        return super().train_epoch(dl_train, **kw)
-
-    def test_epoch(self, dl_test: DataLoader, **kw):
-        return super().test_epoch(dl_test, **kw)
-
-    def train_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
-        x = x.to(self.device)
-        y = y.to(self.device)
-
-        model_kwargs = {
-            "labels": y
-        }
-
-        self.optimizer.zero_grad()
-
-
-        outputs = self.model(x, **model_kwargs)
-
-        loss = outputs[0]
-        loss = loss.clone().mean()
-        loss.backward()
-
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        self.optimizer.step()
-
-        num_correct = 0
-        if return_acc:
-            self.model.eval()  # small hack but it's working
-            acc = self.test_batch(batch)
-            num_correct = acc.num_correct
-            self.model.train()
-
-        return BatchResult(loss.item(), num_correct)
-
-    def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, encoder_token_type_ids, y, decoder_attention_mask, decoder_token_type_ids = batch
-        x = x.to(self.device)
-        y = y.to(self.device)
-
-        correct_labels = x[:, 1].clone()
-        total_loss = torch.zeros(1, dtype=float)
-        pred = []
-
-        batch_size = x.size(0)
-
-        best_res = [(torch.tensor(1e9), -1) for _ in range(batch_size)]
-
-        inp_x = []
-        inp_y = []
-
-        for label_id in self.labels:
-            curr_x = x.clone().to(self.device)
-            curr_x[:, 1] = label_id
-            inp_x.append(curr_x)
-            inp_y.append(y.clone())
-
-        inp_x = torch.cat(inp_x)
-        inp_y = torch.cat(inp_y)
-
-        model_kwargs = {
-            "labels": inp_y
-        }
-        with torch.no_grad():
-            outputs = self.model(inp_x, **model_kwargs)
-            loss = outputs[0]
-            loss = loss.view(inp_x.size(0), -1)
-
-        loss = loss.mean(dim=1)
-
-        for i in range(len(self.labels)):
-            for j in range(batch_size):
-                curr_loss = loss[i * batch_size + j]
-                if loss[i * batch_size + j] < best_res[j][0]:
-                    best_res[j] = (curr_loss, self.labels[i])
-
-        total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
-
-        pred = torch.tensor([label[1] for label in best_res])
-        pred.to('cpu')
-        correct_labels = correct_labels.to('cpu')
-        # import pdb; pdb.set_trace()
-        num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
-
-        return BatchResult(total_loss.item(), num_correct.item())
