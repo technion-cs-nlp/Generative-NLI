@@ -37,7 +37,7 @@ class Trainer(abc.ABC):
         self.device = device
         # self.batch_idx = 0
         self.epoch = 0
-        model.to(self.device)
+        # model.to(self.device)
 
     def fit(self, dl_train: DataLoader, dl_test: DataLoader,
             num_epochs, checkpoints: str = None,
@@ -377,7 +377,6 @@ class PremiseGeneratorTrainer(Trainer):
             "decoder_attention_mask": decoder_attention_mask,
             "labels": y
         }
-
         self.optimizer.zero_grad()
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
 
@@ -385,7 +384,7 @@ class PremiseGeneratorTrainer(Trainer):
         loss = loss.mean()
         loss.backward()
 
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
@@ -400,18 +399,20 @@ class PremiseGeneratorTrainer(Trainer):
             num_correct = acc.num_correct
             self.model.train()
 
-        loss = loss.item()
+        loss_item = loss.item()
 
         if self.freeze_ratio > 0.0:
             if self.last_freeze_loss is None:
-                        self.last_freeze_loss = loss
+                        self.last_freeze_loss = loss_item
             elif loss <= 0.5 * self.last_freeze_loss:
-                self.last_freeze_loss = loss
+                self.last_freeze_loss = loss_item
                 print("Freezing half of the unfrozzen layers")
                 self.freeze_remaining_layers()
                 self.freeze_ratio = 0.5 * self.freeze_ratio + 0.5
 
-        return BatchResult(loss, num_correct)
+        del loss
+
+        return BatchResult(loss_item, num_correct)
 
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, y, decoder_attention_mask = batch
@@ -459,10 +460,8 @@ class PremiseGeneratorTrainer(Trainer):
         with torch.no_grad():
             outputs = self.model(input_ids=inp_x, decoder_input_ids=inp_y, **model_kwargs)
             loss = outputs[0]
-            # import pdb; pdb.set_trace()
             loss = loss.view(inp_x.size(0), -1)
             loss = loss.mean(dim=1)
-        # import pdb; pdb.set_trace()
         for i in range(len(self.labels)):
             for j in range(batch_size):
                 curr_loss = loss[i * batch_size + j]
@@ -478,7 +477,6 @@ class PremiseGeneratorTrainer(Trainer):
         pred = torch.tensor([label[1] for label in best_res])
         pred.to('cpu')
         correct_labels = correct_labels.to('cpu')
-        # import pdb; pdb.set_trace()
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
         tot = total_loss.item()
