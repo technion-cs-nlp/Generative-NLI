@@ -16,6 +16,7 @@ from src.train import PremiseGeneratorTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim.sgd import SGD
 
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli', model_path=None,
@@ -24,6 +25,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
+                   optimizer_type='Adam', momentum=0.9,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    **kw):
@@ -119,11 +121,19 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                         model_path=model_path, 
                         param_freezing_ratio=param_freezing_ratio)
 
+    model.to(device)
+
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
     
-    optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
+    if optimizer_type.lower() == 'adam':
+        optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
+    elif optimizer_type.lower() == 'sgd':
+        optimizer = SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    else:
+        raise AttributeError('only SGD and Adam supported for now')
+    
     num_steps = batches if batches > 0 else len(dl_train) // bs_train
     num_steps = epochs * num_steps
     print(f"Number of training steps: {num_steps}")
@@ -232,7 +242,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     model = get_model(tokenizer=tokenizer, tokenizer_decoder=tokenizer_decoder, model=model_type, model_name=model_name,
                             decoder_model_name=decoder_model_name, model_path=model_path)
 
-    # model.to(device)
+    model.to(device)
                             
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
@@ -322,6 +332,10 @@ def parse_cli():
                         help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
     sp_exp.add_argument('--param-freezing-ratio', type=float,
                         help='How many of the params to freeze', default=0.0)
+    sp_exp.add_argument('--optimizer-type', '-ot', type=str,
+                        help='Which type of optimizer to use', default="Adam")
+    sp_exp.add_argument('--momentum', '-m', type=float,
+                        help='Momentum for SGD', default=0.9)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
