@@ -28,19 +28,21 @@ class PremiseGenerationDataset(Dataset):
 
         input_dict = self.tokenizer_encoder.encode_plus(sent,
                                                 max_length=self.max_len,
-                                                pad_to_max_length=True
+                                                pad_to_max_length=True,
+                                                return_tensors='pt',
                                                 )
         target_dict = self.tokenizer_decoder.encode_plus(tgt,
                                                 max_length=self.max_len,
-                                                pad_to_max_length=True
+                                                pad_to_max_length=True,
+                                                return_tensors='pt',
                                                 )
         # except Exception as e:
         #     print(e)
         #     print(tgt)
         #     import pdb; pdb.set_trace()
 
-        res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask']] + \
-              [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask']]
+        res = [input_dict[item] for item in ['input_ids', 'attention_mask']] + \
+              [target_dict[item] for item in ['input_ids', 'attention_mask']]
 
         # res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
         #       [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
