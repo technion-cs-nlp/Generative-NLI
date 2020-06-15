@@ -384,14 +384,29 @@ class PremiseGeneratorTrainer(Trainer):
         loss = loss.mean()
         loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        if False:       ## Infrastracture
+            size = max(self.labels) + 1
+            # all_neg = []
+            for label_id in self.labels:
+                neg_x = x.clone()
+                neg_x[:, 1] = (neg_x[:, 1] + 1) % size
+                # all_neg.append(neg_x)
+                neg_loss = self.model(input_ids=neg_x, decoder_input_ids=y, **model_kwargs)
+                neg_loss *= -1
+                neg_loss.backward()
+                del neg_x
+
+        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
 
         del x, y, encoder_attention_mask, decoder_attention_mask
-        torch.cuda.empty_cache()
+        if False:
+            del neg_x
+        # torch.cuda.empty_cache()
 
+        # validate
         num_correct = 0
         if return_acc:
             self.model.eval()  # small hack but it's working
@@ -462,19 +477,25 @@ class PremiseGeneratorTrainer(Trainer):
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
             loss = loss.mean(dim=1)
-        for i in range(len(self.labels)):
-            for j in range(batch_size):
-                curr_loss = loss[i * batch_size + j]
-                if loss[i * batch_size + j] < best_res[j][0]:
-                    best_res[j] = (curr_loss, self.labels[i])
+        # for i in range(len(self.labels)):
+        #     for j in range(batch_size):
+        #         curr_loss = loss[i * batch_size + j]
+        #         if loss[i * batch_size + j] < best_res[j][0]:
+        #             best_res[j] = (curr_loss, self.labels[i])
+
+        ret = torch.min(x.mean(dim=1).view(len(self.labels),-1),dim=0)
+        pred = ret.indices
+        losses = ret.values
                 
         # del x, y, encoder_attention_mask, decoder_attention_mask
         del inp_x, inp_y, inp_d_a_m, inp_e_a_m
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
 
-        total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
+        # total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
+        total_loss = losses.sum()
 
-        pred = torch.tensor([label[1] for label in best_res])
+        # pred = torch.tensor([label[1] for label in best_res])
+        pred = torch.tensor([self.labels[i] for i in pred])
         pred.to('cpu')
         correct_labels = correct_labels.to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
