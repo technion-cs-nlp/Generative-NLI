@@ -26,6 +26,8 @@ class PremiseGenerationDataset(Dataset):
 
         sent = '[' + self.labels[index][:-1].upper().replace(' ', '') + '] ' + inp
 
+        # import pdb; pdb.set_trace()
+
         input_dict = self.tokenizer_encoder.encode_plus(sent,
                                                 max_length=self.max_len,
                                                 pad_to_max_length=True,
@@ -41,8 +43,8 @@ class PremiseGenerationDataset(Dataset):
         #     print(tgt)
         #     import pdb; pdb.set_trace()
 
-        res = [input_dict[item] for item in ['input_ids', 'attention_mask']] + \
-              [target_dict[item] for item in ['input_ids', 'attention_mask']]
+        res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']] + \
+              [target_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']]
 
         # res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
         #       [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]

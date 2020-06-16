@@ -384,26 +384,26 @@ class PremiseGeneratorTrainer(Trainer):
         loss = loss.mean()
         loss.backward()
 
-        if False:       ## Infrastracture
-            size = max(self.labels) + 1
-            # all_neg = []
-            for label_id in self.labels:
-                neg_x = x.clone()
-                neg_x[:, 1] = (neg_x[:, 1] + 1) % size
-                # all_neg.append(neg_x)
-                neg_loss = self.model(input_ids=neg_x, decoder_input_ids=y, **model_kwargs)
-                neg_loss *= -1
-                neg_loss.backward()
-                del neg_x
-
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
 
+        if True:       ## Infrastracture
+            size = max(self.labels) + 1
+            # all_neg = []
+            for _ in range(len(self.labels) - 1):
+                neg_x = x.clone()
+                neg_x[:, 1] = (neg_x[:, 1] + 1) % size
+                # all_neg.append(neg_x)
+                neg_loss = self.model(input_ids=neg_x, decoder_input_ids=y, **model_kwargs)[0]
+                neg_loss = neg_loss.mean()
+                neg_loss *= -1
+                neg_loss.backward()
+                self.optimizer.step()
+                del neg_x, neg_loss
+
         del x, y, encoder_attention_mask, decoder_attention_mask
-        if False:
-            del neg_x
         # torch.cuda.empty_cache()
 
         # validate
@@ -431,7 +431,7 @@ class PremiseGeneratorTrainer(Trainer):
 
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, y, decoder_attention_mask = batch
-
+       
         correct_labels = x[:, 1].clone()
         total_loss = torch.zeros(1, dtype=float)
         pred = []
@@ -483,7 +483,7 @@ class PremiseGeneratorTrainer(Trainer):
         #         if loss[i * batch_size + j] < best_res[j][0]:
         #             best_res[j] = (curr_loss, self.labels[i])
 
-        ret = torch.min(x.mean(dim=1).view(len(self.labels),-1),dim=0)
+        ret = torch.min(loss.view(len(self.labels),-1),dim=0)
         pred = ret.indices
         losses = ret.values
                 
