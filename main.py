@@ -18,6 +18,16 @@ import math
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim.sgd import SGD
 
+def my_collate(batch):
+    # import pdb; pdb.set_trace()
+    batch = tuple(map(list,zip(*batch)))
+    x, encoder_attention_mask, y, decoder_attention_mask = [torch.stack(batch[i]) for i in range(4)]
+    e_trim = (encoder_attention_mask>0).nonzero()[:,-1].max()
+    d_trim = (decoder_attention_mask>0).nonzero()[:,-1].max()
+
+    trim = max(e_trim,d_trim)
+    
+    return x[:,:trim], encoder_attention_mask[:,:trim], y[:,:trim], decoder_attention_mask[:,:trim]
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli', model_path=None,
                    model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name='gpt2', seed=None,
@@ -123,9 +133,9 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     model.to(device)
 
-    dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True)
-    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
-    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
+    dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False, collate_fn=my_collate)
+    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, collate_fn=my_collate)
+    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, collate_fn=my_collate)
     
     if optimizer_type.lower() == 'adam':
         optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
@@ -151,7 +161,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
-            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
+            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, collate_fn=my_collate)
             trainer.test(dl_hard_test, writer=writer)
 
 
@@ -244,8 +254,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     model.to(device)
                             
-    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False)
-    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False)
+    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, collate_fn=my_collate)
+    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, collate_fn=my_collate)
 
     writer = None
     if checkpoints is None:
@@ -258,7 +268,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
-            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
+            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, collate_fn=my_collate)
             fit_res = trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
             save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
 
