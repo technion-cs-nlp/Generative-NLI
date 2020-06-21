@@ -378,32 +378,38 @@ class PremiseGeneratorTrainer(Trainer):
             "labels": y
         }
         self.optimizer.zero_grad()
+        loss_sum = 0
+
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
 
         loss = outputs[0]
         loss = loss.mean()
         loss.backward()
+        loss_sum += loss
+
+        if True:       ## Infrastracture
+            max_label = max(self.labels)
+            # all_neg = []
+            for delta in range(1,len(self.labels)):
+                neg_x = x.clone()
+                neg_x[:, 1] = max_label - (max_label - neg_x[:, 1] + delta) % (len(self.labels))        # a very complicated way to change all the labels
+                # all_neg.append(neg_x)
+                neg_loss = self.model(input_ids=neg_x, decoder_input_ids=y, **model_kwargs)[0]
+                neg_loss = neg_loss.mean()
+                neg_loss = 10.0 / neg_loss
+                neg_loss.backward()
+                loss_sum += neg_loss
+                # self.optimizer.step()
+                del neg_x
+
+        del x, y, encoder_attention_mask, decoder_attention_mask
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
 
-        if True:       ## Infrastracture
-            size = max(self.labels) + 1
-            # all_neg = []
-            for _ in range(len(self.labels) - 1):
-                neg_x = x.clone()
-                neg_x[:, 1] = (neg_x[:, 1] + 1) % size
-                # all_neg.append(neg_x)
-                neg_loss = self.model(input_ids=neg_x, decoder_input_ids=y, **model_kwargs)[0]
-                neg_loss = neg_loss.mean()
-                neg_loss *= -1
-                neg_loss.backward()
-                self.optimizer.step()
-                del neg_x, neg_loss
-
-        del x, y, encoder_attention_mask, decoder_attention_mask
         # torch.cuda.empty_cache()
 
         # validate
@@ -414,7 +420,7 @@ class PremiseGeneratorTrainer(Trainer):
             num_correct = acc.num_correct
             self.model.train()
 
-        loss_item = loss.item()
+        loss_item = loss_sum.item()
 
         if self.freeze_ratio > 0.0:
             if self.last_freeze_loss is None:
@@ -437,8 +443,6 @@ class PremiseGeneratorTrainer(Trainer):
         pred = []
 
         batch_size = x.size(0)
-
-        best_res = [(torch.tensor(1e9), -1) for _ in range(batch_size)]
 
         inp_x = []
         inp_y = []
