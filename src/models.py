@@ -9,12 +9,12 @@ def freeze_params(params, ratio):
 
 def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None,
             tokenizer_decoder=None, decoder_model_name=None, 
-            model_path=None, param_freezing_ratio=0.0):
+            model_path=None, param_freezing_ratio=0.0, num_labels=3):
     res_model = None
     if tokenizer is None:
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model_list = ['masked', 'encode-decode', 'hybrid', 'decoder', 'bart']
+    model_list = ['masked', 'encode-decode', 'hybrid', 'decoder', 'bart', 'discriminitive']
     if model == 'encode-decode':
         from transformers import EncoderDecoderModel, AutoConfig, EncoderDecoderConfig
         if decoder_model_name is None:
@@ -52,10 +52,14 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         from transformers import GPT2LMHeadModel
         res_model = GPT2LMHeadModel.from_pretrained(model_name)
 
+    elif 'discriminitive'.startswith(model):
+        from transformers import AutoModelForSequenceClassification
+        res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels)
+
     else: 
         print(f"Please pick a valid model in {model_list}")
 
-    if model_path is None:          ## only change embeddings size if its not a trained model
+    if model_path is None and not 'discriminitive'.startswith(model):          ## only change embeddings size if its not a trained model
         # import pdb; pdb.set_trace()
         res_model.resize_token_embeddings(len(tokenizer))
         

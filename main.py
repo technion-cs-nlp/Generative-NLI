@@ -29,6 +29,14 @@ def my_collate(batch):
     
     return x[:,:trim], encoder_attention_mask[:,:trim], y[:,:trim], decoder_attention_mask[:,:trim]
 
+def my_collate_disc(batch):
+    # import pdb; pdb.set_trace()
+    batch = tuple(map(list,zip(*batch)))
+    x, attention_mask, labels = [torch.stack(batch[i]) for i in range(3)]
+    trim = (attention_mask>0).nonzero()[:,-1].max()
+    
+    return x[:,:trim], attention_mask[:,:trim], labels
+
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli', model_path=None,
                    model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name='gpt2', seed=None,
                    drive=False, do_test=True,
