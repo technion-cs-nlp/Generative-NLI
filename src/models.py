@@ -14,7 +14,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     if tokenizer is None:
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model_list = ['masked', 'encode-decode', 'hybrid', 'decoder', 'bart', 'discriminitive']
+    model_list = ['masked', 'encode-decode', 'hybrid', 'decoder', 'bart', 'discriminitive', 'shared']
     if model == 'encode-decode':
         from transformers import EncoderDecoderModel, AutoConfig, EncoderDecoderConfig
         if decoder_model_name is None:
@@ -51,6 +51,25 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     elif model == 'decoder':
         from transformers import GPT2LMHeadModel
         res_model = GPT2LMHeadModel.from_pretrained(model_name)
+
+    elif model == 'shared':
+        if model_path is None:
+            from transformers import AutoModelForCausalLM, EncoderDecoderModel
+            decoder = AutoModelForCausalLM.from_pretrained(model_name, is_decoder=True)
+            try:
+                name = model_name.split('-')[0]
+                encoder = getattr(decoder, name)
+            except Exception as e:
+                raise AttributeError(f"Can't use share model with {model_name} architecture")
+
+            res_model = EncoderDecoderModel(encoder=encoder, decoder=decoder)
+            res_model.encoder.resize_token_embeddings(len(tokenizer))
+            res_model.decoder.resize_token_embeddings(len(tokenizer))
+        else:
+            from transformers import EncoderDecoderModel
+            res_model = EncoderDecoderModel.from_pretrained(model_path)
+
+        return res_model
 
     elif 'discriminitive'.startswith(model):
         from transformers import AutoModelForSequenceClassification
