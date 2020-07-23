@@ -358,10 +358,10 @@ class PremiseGeneratorTrainer(Trainer):
         self.freeze_ratio = 0.0
         self.num_layers = len(list(self.model.modules()))
         self.labels = possible_labels_ids
+        self.epsilon = 0.0
 
     def train_epoch(self, dl_train: DataLoader, **kw):
-        res = super().train_epoch(dl_train, **kw)
-        return res
+        return super().train_epoch(dl_train, **kw)
 
     def test_epoch(self, dl_test: DataLoader, **kw):
         return super().test_epoch(dl_test, **kw)
@@ -373,6 +373,8 @@ class PremiseGeneratorTrainer(Trainer):
         encoder_attention_mask = encoder_attention_mask.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
 
+        batch_size = x.shape[0]
+
         model_kwargs = {
             "attention_mask": encoder_attention_mask,
             "decoder_attention_mask": decoder_attention_mask,
@@ -381,43 +383,55 @@ class PremiseGeneratorTrainer(Trainer):
         self.optimizer.zero_grad()
 
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
-
+        # import pdb; pdb.set_trace()
         loss = outputs[0]
-        loss = loss.mean()
+        logits = outputs[1]
+        loss = loss.view(-1,batch_size).mean(0)
         x.detach()
-
-        if True:       ## Infrastracture
+        min_loss = None
+        if False:       ## Infrastracture
             max_label = max(self.labels)
-            bad_losses = []
-            # all_neg = []
+            # max_loss = torch.zeros(batch_size, device=self.device,requires_grad=True)
+            max_log = torch.zeros_like(logits, device=self.device,requires_grad=True)
+            min_loss = torch.zeros(batch_size, device=self.device,requires_grad=True) + 1000.0
             for delta in range(1,len(self.labels)):
-                bad_x = x.clone().to(device)
+                bad_x = x.clone().to(self.device)
                 bad_x[:, 1] = max_label - (max_label - bad_x[:, 1] + delta) % (len(self.labels))        # a very complicated way to change all the labels
-                bad_loss = self.model(input_ids=bad_x, decoder_input_ids=y, **model_kwargs)[0]
-                bad_loss = bad_loss.mean()
-                bad_losses.append(bad_loss)
+                bad_out = self.model(input_ids=bad_x, decoder_input_ids=y, **model_kwargs)
+                bad_loss = bad_out[0]
+                bad_log = bad_out[1]
+                bad_loss = bad_loss.view(-1,batch_size).mean(0)
+                # max_loss = torch.max(max_loss, bad_loss)
+                max_log = torch.max(max_log, bad_log)
+                min_loss = torch.min(min_loss, bad_loss)
                 del bad_x
             # import pdb; pdb.set_trace()
-            loss = max(torch.tensor([0.0], device=self.device,requires_grad=True), 1.0 + max(bad_losses)-loss)
+            # diff = (loss - min_loss)
+            diff = (max_log - logits)
+            zero = torch.zeros_like(diff, device=self.device,requires_grad=True)
+            loss_obj = torch.max(zero, 1.0 + diff)
+            loss_obj = loss_obj.mean()
+        else:
+            loss_obj = loss.mean()
 
         del x, y, encoder_attention_mask, decoder_attention_mask
 
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        loss.backward()
+        loss_obj.backward()
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
 
         # validate
-        num_correct = 0
-        
+        # num_correct = sum(loss < min_loss) if min_loss is not None else 0
+
         self.model.eval()  # small hack but it's working
         acc = self.test_batch(batch)
         num_correct = acc.num_correct
         self.model.train()
 
-        loss_item = loss.item()
+        loss_item = loss_obj.item()
 
         if self.freeze_ratio > 0.0:
             if self.last_freeze_loss is None:
@@ -471,7 +485,7 @@ class PremiseGeneratorTrainer(Trainer):
         model_kwargs = {
             "attention_mask": inp_e_a_m,
             "decoder_attention_mask": inp_d_a_m,
-            "lm_labels": inp_y
+            "labels": inp_y
         }
         with torch.no_grad():
             outputs = self.model(input_ids=inp_x, decoder_input_ids=inp_y, **model_kwargs)
@@ -507,10 +521,10 @@ class PremiseGeneratorTrainer(Trainer):
 
 
 class DiscriminitiveTrainer(Trainer):
-    def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, device=None):
+    def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, tokenizer=None, device=None):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
-        # self.tokenizer = tokenizer
+        self.tokenizer = tokenizer
         self.max_len = max_len
         self.last_freeze_loss = None
         self.freeze_ratio = 0.0
@@ -523,13 +537,22 @@ class DiscriminitiveTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        x, attention_mask, labels = batch
+        if len(batch) == 3:         # H, P, y
+            H,P,labels = batch
+            input_dict = tokenizer.batch_encode_plus([[H[i],P[i]] for i in len(H)], pad_to_max_length=True, return_tensors='pt')
+        elif len(batch) == 2:     #Hypotesis only
+            H,labels = batch
+            input_dict = tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+        batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask', 'token_type_ids']]
+        x, attention_mask, token_type_ids = batch_encoded
         x = x.to(self.device)
         attention_mask = attention_mask.to(self.device)
+        token_type_ids = token_type_ids.to(self.device)
         labels = labels.to(self.device)
 
         model_kwargs = {
             "attention_mask": attention_mask,
+            "token_type_ids": token_type_ids,
             "labels": labels
         }
         self.optimizer.zero_grad()
