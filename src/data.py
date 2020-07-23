@@ -32,11 +32,13 @@ class PremiseGenerationDataset(Dataset):
                                                 max_length=self.max_len,
                                                 pad_to_max_length=True,
                                                 return_tensors='pt',
+                                                truncation=True,
                                                 )
         target_dict = self.tokenizer_decoder.encode_plus(tgt,
                                                 max_length=self.max_len,
                                                 pad_to_max_length=True,
                                                 return_tensors='pt',
+                                                truncation=True,
                                                 )
         # except Exception as e:
         #     print(e)
@@ -80,17 +82,17 @@ class DiscriminitiveDataset(Dataset):
 
         inp = split[0]
         tgt = split[1].replace('\n', '')
-        lbl = self.labels[index]
+        lbl = torch.tensor(self.labels[index])
 
-        input_dict = self.tokenizer.encode_plus(inp, tgt,
-                                                max_length=self.max_len,
-                                                pad_to_max_length=True,
-                                                return_tensors='pt',
-                                                )
+        # input_dict = self.tokenizer.encode_plus(inp, tgt,
+        #                                         max_length=self.max_len,
+        #                                         pad_to_max_length=True,
+        #                                         return_tensors='pt',
+        #                                         )
 
-        res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']]
+        # res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
 
-        return tuple(res, torch.tensor(label))
+        return (inp,tgt,lbl)
 
     def __len__(self):
         return self.size
@@ -120,17 +122,17 @@ class HypothesisOnlyDataset(Dataset):
 
         inp = split[0]
         # tgt = split[1].replace('\n', '')
-        lbl = self.labels[index]
+        lbl = torch.tensor(self.labels[index])
 
-        input_dict = self.tokenizer.encode_plus(inp,
-                                                max_length=self.max_len,
-                                                pad_to_max_length=True,
-                                                return_tensors='pt',
-                                                )
+        # input_dict = self.tokenizer.encode_plus(inp,
+        #                                         max_length=self.max_len,
+        #                                         pad_to_max_length=True,
+        #                                         return_tensors='pt',
+        #                                         )
 
-        res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']]
+        # res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']]
 
-        return tuple(res, torch.tensor(label))
+        return (inp,lbl)
 
     def __len__(self):
         return self.size
