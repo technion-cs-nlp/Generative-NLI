@@ -8,11 +8,11 @@ import torch
 import torchvision
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoTokenizer, AdamW, AutoModel, \
-get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup
+get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup, get_constant_schedule_with_warmup
 
-from src.data import PremiseGenerationDataset
+from src.data import PremiseGenerationDataset, DiscriminativeDataset
 from src.models import get_model
-from src.train import PremiseGeneratorTrainer
+from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -43,7 +43,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
-                   optimizer_type='Adam', momentum=0.9,
+                   optimizer_type='Adam', momentum=0.9, word_dropout=0.0, tie_embeddings=False,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    **kw):
@@ -87,42 +87,63 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     size_test = batches * bs_test if batches > 0 else 10**8
     size_train = batches * bs_train if batches > 0 else 10**8
 
-    if max_len == 0:
-        max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
-                              '|||', tokenizer)
-        print(f'Longest Sequence is: {max_len} token_ids')
-        max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-    max_len = int(max_len)
-
-    if decoder_max_len == 0:
-        if tokenizer_decoder is not None:
-            decoder_max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
-                              '|||', tokenizer_decoder)
-            print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
-            decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-        else:
-            decoder_max_len = max_len
-    decoder_max_len = int(decoder_max_len)
-
-    max_len = max(max_len, decoder_max_len)
-    
-    print(f'Setting max_len to: {max_len}')
-
     all_labels_text = list(set(test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
-    all_labels_text.sort()
-    all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
+    num_labels = len(all_labels_text)
 
-    tokenizer.add_tokens(all_labels)
-    labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-    print(f'Labels IDs: {labels_ids}')
-    if tokenizer_decoder is not None:
-        tokenizer_decoder.add_tokens(all_labels)
-        labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        print(f'Labels IDs for decoder: {labels_ids_decoder}')
+    if model_type != 'discriminative':
+        if max_len == 0:
+            max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
+                                '|||', tokenizer)
+            print(f'Longest Sequence is: {max_len} token_ids')
+            max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
+        max_len = int(max_len)
 
-    ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
-    ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
-    ds_train = PremiseGenerationDataset(train_lines, train_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
+        if decoder_max_len == 0:
+            if tokenizer_decoder is not None:
+                decoder_max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
+                                '|||', tokenizer_decoder)
+                print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
+                decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
+            else:
+                decoder_max_len = max_len
+        decoder_max_len = int(decoder_max_len)
+
+        max_len = max(max_len, decoder_max_len)
+        
+        print(f'Setting max_len to: {max_len}')
+
+        all_labels_text.sort()
+        all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
+
+        tokenizer.add_tokens(all_labels)
+        labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        print(f'Labels IDs: {labels_ids}')
+        if tokenizer_decoder is not None:
+            tokenizer_decoder.add_tokens(all_labels)
+            labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
+            print(f'Labels IDs for decoder: {labels_ids_decoder}')
+
+    dataset = None
+    trainer_type = None
+    data_args = {}
+    dataloader_args = {}
+    train_args = {}
+    if model_type in ['encode-decode','bart','shared']:
+        dataset = PremiseGenerationDataset
+        trainer_type = PremiseGeneratorTrainer
+        data_args['tokenizer_decoder'] = tokenizer_decoder
+        train_args['possible_labels_ids'] = labels_ids
+        dataloader_args['collate_fn'] = my_collate
+    elif model_type == 'discriminative':
+        dataset = DiscriminativeDataset
+        trainer_type = DiscriminativeTrainer
+        train_args['num_labels'] = num_labels
+        train_args['tokenizer'] = tokenizer
+
+    ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
+    ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
+    data_args['dropout'] = word_dropout
+    ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
@@ -137,13 +158,14 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                         model_name=model_name,
                         decoder_model_name=decoder_model_name, 
                         model_path=model_path, 
-                        param_freezing_ratio=param_freezing_ratio)
+                        param_freezing_ratio=param_freezing_ratio,
+                        tie_embeddings=tie_embeddings)
 
     model.to(device)
-
-    dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=False, collate_fn=my_collate)
-    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, collate_fn=my_collate)
-    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, collate_fn=my_collate)
+    
+    dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True, **dataloader_args)
+    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
+    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, **dataloader_args)
     
     if optimizer_type.lower() == 'adam':
         optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
@@ -152,13 +174,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     else:
         raise AttributeError('only SGD and Adam supported for now')
     
-    num_steps = batches if batches > 0 else len(dl_train) // bs_train
-    num_steps = epochs * num_steps
+    num_batches = batches if batches > 0 else len(dl_train)
+    num_steps = epochs * num_batches
     print(f"Number of training steps: {num_steps}")
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=round(0.1 * num_steps), num_training_steps=num_steps)
+    scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches)
     writer = SummaryWriter()
 
-    trainer = PremiseGeneratorTrainer(model, optimizer, scheduler, max_len, labels_ids, device)
+    trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
@@ -214,42 +236,61 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     size_test = batches * bs_test if batches > 0 else 10**8
 
-    if max_len == 0:
-        max_len = get_max_len(test_lines[:size_test],'|||', tokenizer)
-        print(f'Longest Sequence is: {max_len} token_ids')
-        max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-    max_len = int(max_len)
+    all_labels_text = list(set(test_labels[:size_test] + val_labels[:size_test] + hard_test_labels[:size_test]))
+    num_labels = len(all_labels_text)
 
-    if decoder_max_len == 0:
+    if model_type != 'discriminative':
+        if max_len == 0:
+            max_len = get_max_len(test_lines[:size_test] + val_lines[:size_test] + hard_test_lines[:size_test],
+                                '|||', tokenizer)
+            print(f'Longest Sequence is: {max_len} token_ids')
+            max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
+        max_len = int(max_len)
+
+        if decoder_max_len == 0:
+            if tokenizer_decoder is not None:
+                decoder_max_len = get_max_len(test_lines[:size_test] + val_lines[:size_test] + hard_test_lines[:size_test],
+                                '|||', tokenizer_decoder)
+                print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
+                decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
+            else:
+                decoder_max_len = max_len
+        decoder_max_len = int(decoder_max_len)
+
+        max_len = max(max_len, decoder_max_len)
+        
+        print(f'Setting max_len to: {max_len}')
+
+        all_labels_text.sort()
+        all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
+
+        tokenizer.add_tokens(all_labels)
+        labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        print(f'Labels IDs: {labels_ids}')
         if tokenizer_decoder is not None:
-            decoder_max_len = get_max_len(test_lines[:size_test] + val_lines[:size_test] + hard_test_lines[:size_test],
-                              '|||', tokenizer_decoder)
-            print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
-            decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-        else:
-            decoder_max_len = max_len
-    decoder_max_len = int(decoder_max_len)
+            tokenizer_decoder.add_tokens(all_labels)
+            labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
+            print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
-    max_len = max(max_len, decoder_max_len)
+    dataset = None
+    trainer_type = None
+    data_args = {}
+    dataloader_args = {}
+    train_args = {}
+    if model_type in ['encode-decode','bart','shared']:
+        dataset = PremiseGenerationDataset
+        trainer_type = PremiseGeneratorTrainer
+        data_args['tokenizer_decoder'] = tokenizer_decoder
+        train_args['possible_labels_ids'] = labels_ids
+        dataloader_args['collate_fn'] = my_collate
+    elif model_type == 'discriminative':
+        dataset = DiscriminativeDataset
+        trainer_type = DiscriminativeTrainer
+        train_args['num_labels'] = num_labels
+        train_args['tokenizer'] = tokenizer
 
-    print(f'Setting max_len to: {max_len}')
-
-    all_labels_text = list(set(test_labels[:size_test]))
-    # import pdb; pdb.set_trace()
-    all_labels_text.sort()
-    # all_labels_text.reverse()
-    all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
-    tokenizer.add_tokens(all_labels)
-    labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-    print(f'Labels IDs: {labels_ids}')
-
-    if tokenizer_decoder is not None:
-        tokenizer_decoder.add_tokens(all_labels)
-        labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        print(f'Labels IDs for decoder: {labels_ids_decoder}')
-
-    ds_test = PremiseGenerationDataset(test_lines, test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
-    ds_val = PremiseGenerationDataset(val_lines, val_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
+    ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
+    ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
@@ -262,21 +303,21 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     model.to(device)
                             
-    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, collate_fn=my_collate)
-    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, collate_fn=my_collate)
+    dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, **dataloader_args)
+    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
 
     writer = None
     if checkpoints is None:
         writer = SummaryWriter()
     
-    trainer = PremiseGeneratorTrainer(model, None, None, max_len, labels_ids, device)
+    trainer = trainer_type(model, optimizer=None, scheduler=None, max_len=max_len, device=device, **train_args)
     fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_labels is not None and hard_test_lines is not None:
-            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
+            ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
-            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, collate_fn=my_collate)
+            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, **dataloader_args)
             fit_res = trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
             save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
 
@@ -354,6 +395,10 @@ def parse_cli():
                         help='Which type of optimizer to use', default="Adam")
     sp_exp.add_argument('--momentum', '-m', type=float,
                         help='Momentum for SGD', default=0.9)
+    sp_exp.add_argument('--word-dropout', '-wdo', type=float,
+                        help='Word dropout rate during training', default=0.0)
+    sp_exp.add_argument('--tie-embeddings','-te', dest='tie_embeddings', action='store_true')
+    sp_exp.set_defaults(tie_embeddings=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,

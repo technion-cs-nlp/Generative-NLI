@@ -9,12 +9,12 @@ def freeze_params(params, ratio):
 
 def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None,
             tokenizer_decoder=None, decoder_model_name=None, 
-            model_path=None, param_freezing_ratio=0.0, num_labels=3):
+            model_path=None, param_freezing_ratio=0.0, num_labels=3, tie_embeddings=False):
     res_model = None
     if tokenizer is None:
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model_list = ['masked', 'encode-decode', 'hybrid', 'decoder', 'bart', 'discriminitive', 'shared']
+    model_list = ['encode-decode', 'decoder-only', 'bart', 'discriminative', 'shared']
     if model == 'encode-decode':
         from transformers import EncoderDecoderModel, AutoConfig, EncoderDecoderConfig
         if decoder_model_name is None:
@@ -32,7 +32,12 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
             res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name)
             res_model.encoder.resize_token_embeddings(len(tokenizer))
             res_model.decoder.resize_token_embeddings(len(tokenizer_decoder))
+
+            if tie_embeddings:
+                res_model.decoder.cls.predictions.decoder.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
+                res_model.decoder.bert.embeddings.word_embeddings.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
         else:
+            # import pdb; pdb.set_trace()
             res_model = EncoderDecoderModel.from_pretrained(model_path)
 
         return res_model
@@ -44,13 +49,9 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         from transformers import BartForConditionalGeneration
         res_model = BartForConditionalGeneration.from_pretrained(model_name)
 
-    elif model == 'masked':
-        from transformers import BertForMaskedLM
-        res_model = BertForMaskedLM.from_pretrained(model_name)
-
-    elif model == 'decoder':
-        from transformers import GPT2LMHeadModel
-        res_model = GPT2LMHeadModel.from_pretrained(model_name)
+    elif model == 'decoder-only':
+        from transformers import AutoModelForCausalLM
+        res_model = AutoModelForCausalLM.from_pretrained(model_name)
 
     elif model == 'shared':
         if model_path is None:
@@ -71,7 +72,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
         return res_model
 
-    elif 'discriminitive'.startswith(model):
+    elif 'discriminative'.startswith(model):
         from transformers import AutoModelForSequenceClassification
         res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels)
 

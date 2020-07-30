@@ -10,6 +10,8 @@ from typing import Callable, Any
 from pathlib import Path
 from src.utils import BatchResult, EpochResult, FitResult
 
+from src.loss import LabelSmoothingCrossEntropy
+
 # return_acc = False
 
 
@@ -358,7 +360,7 @@ class PremiseGeneratorTrainer(Trainer):
         self.freeze_ratio = 0.0
         self.num_layers = len(list(self.model.modules()))
         self.labels = possible_labels_ids
-        self.epsilon = 0.0
+        self.epsilon = 0.1
 
     def train_epoch(self, dl_train: DataLoader, **kw):
         return super().train_epoch(dl_train, **kw)
@@ -446,6 +448,95 @@ class PremiseGeneratorTrainer(Trainer):
 
         return BatchResult(loss_item, num_correct)
 
+    def train_batch1(self, batch) -> BatchResult:
+        x, encoder_attention_mask, y, decoder_attention_mask = batch
+
+        n_labels = len(self.labels)
+       
+        correct_labels = x[:, 1].clone()
+        total_loss = torch.zeros(1, dtype=float)
+        pred = []
+
+        batch_size = x.size(0)
+
+        inp_x = []
+        inp_y = []
+        inp_e_a_m = []
+        inp_d_a_m = []
+        # inp_d_e_a_m = []
+
+        for label_id in self.labels:
+            curr_x = x.clone()
+            curr_x[:, 1] = label_id
+            inp_x.append(curr_x)
+            inp_y.append(y)
+            inp_e_a_m.append(encoder_attention_mask)
+            inp_d_a_m.append(decoder_attention_mask)
+            # inp_d_e_a_m.append(decoder_encoder_attention_mask)
+
+        inp_x = torch.cat(inp_x)
+        inp_y = torch.cat(inp_y)
+        inp_e_a_m = torch.cat(inp_e_a_m)
+        inp_d_a_m = torch.cat(inp_d_a_m)
+        # inp_d_e_a_m = torch.cat(inp_d_e_a_m)
+
+        inp_x = inp_x.to(self.device)
+        inp_y = inp_y.to(self.device)
+        inp_e_a_m = inp_e_a_m.to(self.device)
+        inp_d_a_m = inp_d_a_m.to(self.device)
+        # inp_d_e_a_m = inp_d_e_a_m.to(self.device)
+
+        model_kwargs = {
+            "attention_mask": inp_e_a_m,
+            "decoder_attention_mask": inp_d_a_m,
+            "labels": inp_y
+        }
+
+        self.optimizer.zero_grad()
+        
+        outputs = self.model(input_ids=inp_x, decoder_input_ids=inp_y, **model_kwargs)
+        loss = outputs[0]
+        loss = loss.view(inp_x.size(0), -1)
+        loss = loss.mean(dim=1)
+        # import pdb; pdb.set_trace()
+        ret = torch.min(loss.view(n_labels,-1),dim=0)
+        pred = ret.indices
+        losses = ret.values
+
+        # loss_obj = LabelSmoothingCrossEntropy(epsilon=self.epsilon)(-loss.view(-1,len(self.labels)),(correct_labels-min(self.labels)).to(self.device))
+
+        l_idx = correct_labels - min(self.labels)           # get locations instead of tokens
+        l_idx = l_idx.to(self.device)
+        loss_obj = (1.0-self.epsilon) * loss.view(n_labels,-1).T.gather(1,l_idx.view(-1,1))  # smoothing 
+
+        for i in range(1,n_labels):
+            indices = (l_idx + i) % n_labels        # next location
+            loss_obj += (self.epsilon / n_labels) * loss.view(n_labels,-1).T.gather(1,indices.view(-1,1))
+
+        loss_obj = loss_obj.mean()
+
+        loss_obj.backward()
+        self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
+                
+        # del x, y, encoder_attention_mask, decoder_attention_mask
+        del inp_x, inp_y, inp_d_a_m, inp_e_a_m
+        # torch.cuda.empty_cache()
+
+        # total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
+        total_loss = losses.sum()
+
+        # pred = torch.tensor([label[1] for label in best_res])
+        pred = torch.tensor([self.labels[i] for i in pred])
+        pred.to('cpu')
+        correct_labels = correct_labels.to('cpu')
+        num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
+
+        tot = loss_obj.item()
+
+        return BatchResult(tot, num_correct.item())
+
     def test_batch(self, batch) -> BatchResult:
         x, encoder_attention_mask, y, decoder_attention_mask = batch
        
@@ -520,7 +611,7 @@ class PremiseGeneratorTrainer(Trainer):
         return BatchResult(tot, num_correct.item())
 
 
-class DiscriminitiveTrainer(Trainer):
+class DiscriminativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, tokenizer=None, device=None):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
@@ -537,12 +628,13 @@ class DiscriminitiveTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
+        # import pdb; pdb.set_trace()
         if len(batch) == 3:         # H, P, y
             H,P,labels = batch
-            input_dict = tokenizer.batch_encode_plus([[H[i],P[i]] for i in len(H)], pad_to_max_length=True, return_tensors='pt')
+            input_dict = self.tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], pad_to_max_length=True, return_tensors='pt')
         elif len(batch) == 2:     #Hypotesis only
             H,labels = batch
-            input_dict = tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+            input_dict = self.tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
         batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask', 'token_type_ids']]
         x, attention_mask, token_type_ids = batch_encoded
         x = x.to(self.device)
@@ -562,7 +654,7 @@ class DiscriminitiveTrainer(Trainer):
         loss, logits = outputs[:2]
         loss = loss.mean()
 
-        del x, y, encoder_attention_mask, decoder_attention_mask
+        del x, attention_mask, token_type_ids
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         loss.backward()
@@ -571,7 +663,7 @@ class DiscriminitiveTrainer(Trainer):
             self.scheduler.step()
 
         # validate
-        labels = labels.detach()
+        labels = labels.to('cpu')
         pred = torch.argmax(logits,dim=1).to('cpu')
 
         num_correct = torch.sum(labels==pred)
@@ -580,16 +672,25 @@ class DiscriminitiveTrainer(Trainer):
 
         del loss
 
-        return BatchResult(loss_item, num_correct)
+        return BatchResult(loss_item, num_correct.item())
 
     def test_batch(self, batch) -> BatchResult:
-        x, attention_mask, labels = batch
+        if len(batch) == 3:         # H, P, y
+            H,P,labels = batch
+            input_dict = self.tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], pad_to_max_length=True, return_tensors='pt')
+        elif len(batch) == 2:     #Hypotesis only
+            H,labels = batch
+            input_dict = self.tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+        batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask', 'token_type_ids']]
+        x, attention_mask, token_type_ids = batch_encoded
         x = x.to(self.device)
         attention_mask = attention_mask.to(self.device)
+        token_type_ids = token_type_ids.to(self.device)
         labels = labels.to(self.device)
 
         model_kwargs = {
             "attention_mask": attention_mask,
+            "token_type_ids": token_type_ids,
             "labels": labels
         }
         with torch.no_grad():
@@ -598,10 +699,10 @@ class DiscriminitiveTrainer(Trainer):
         loss, logits = outputs[:2]
         loss = loss.mean()
 
-        del x, y, encoder_attention_mask, decoder_attention_mask
-        
-        # validate
-        labels = labels.detach()
+        del x, attention_mask, token_type_ids
+
+        # check accuracy
+        labels = labels.to('cpu')
         pred = torch.argmax(logits,dim=1).to('cpu')
 
         num_correct = torch.sum(labels==pred)
@@ -609,5 +710,4 @@ class DiscriminitiveTrainer(Trainer):
         loss_item = loss.item()
 
         del loss
-
-        return BatchResult(loss_item, num_correct)
+        return BatchResult(loss_item, num_correct.item())

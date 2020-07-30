@@ -20,5 +20,6 @@ class LabelSmoothingCrossEntropy(nn.Module):
         n = preds.size()[-1]
         log_preds = F.log_softmax(preds, dim=-1)
         loss = reduce_loss(-log_preds.sum(dim=-1), self.reduction)
+        # import pdb; pdb.set_trace()
         nll = F.nll_loss(log_preds, target, reduction=self.reduction)
         return linear_combination(loss/n, nll, self.epsilon)
