@@ -351,7 +351,8 @@ class Trainer(abc.ABC):
 
 
 class PremiseGeneratorTrainer(Trainer):
-    def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None, device=None):
+    def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
+                epsilon=0.0, device=None):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
         # self.tokenizer = tokenizer
@@ -360,7 +361,7 @@ class PremiseGeneratorTrainer(Trainer):
         self.freeze_ratio = 0.0
         self.num_layers = len(list(self.model.modules()))
         self.labels = possible_labels_ids
-        self.epsilon = 0.1
+        self.epsilon = epsilon
 
     def train_epoch(self, dl_train: DataLoader, **kw):
         return super().train_epoch(dl_train, **kw)
@@ -369,6 +370,12 @@ class PremiseGeneratorTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
+        if self.epsilon > 0.0:
+            return self.train_batch_label_smoothing(batch)
+        else:
+            return self.train_batch_normal(batch)
+
+    def train_batch_normal(self, batch) -> BatchResult:
         x, encoder_attention_mask, y, decoder_attention_mask = batch
         x = x.to(self.device)
         y = y.to(self.device)
@@ -448,7 +455,7 @@ class PremiseGeneratorTrainer(Trainer):
 
         return BatchResult(loss_item, num_correct)
 
-    def train_batch1(self, batch) -> BatchResult:
+    def train_batch_label_smoothing(self, batch) -> BatchResult:
         x, encoder_attention_mask, y, decoder_attention_mask = batch
 
         n_labels = len(self.labels)
@@ -635,18 +642,24 @@ class DiscriminativeTrainer(Trainer):
         elif len(batch) == 2:     #Hypotesis only
             H,labels = batch
             input_dict = self.tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
-        batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask', 'token_type_ids']]
-        x, attention_mask, token_type_ids = batch_encoded
+        # import pdb; pdb.set_trace()
+        batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
+        x, attention_mask = batch_encoded
         x = x.to(self.device)
         attention_mask = attention_mask.to(self.device)
-        token_type_ids = token_type_ids.to(self.device)
+        # token_type_ids = token_type_ids.to(self.device)
         labels = labels.to(self.device)
 
         model_kwargs = {
             "attention_mask": attention_mask,
-            "token_type_ids": token_type_ids,
+            # "token_type_ids": token_type_ids,
             "labels": labels
         }
+
+        if 'token_type_ids' in input_dict:
+            token_type_ids = input_dict['token_type_ids']
+            token_type_ids = token_type_ids.to(self.device)
+            model_kwargs['token_type_ids'] = token_type_ids
         self.optimizer.zero_grad()
 
         outputs = self.model(input_ids=x, **model_kwargs)
@@ -654,7 +667,9 @@ class DiscriminativeTrainer(Trainer):
         loss, logits = outputs[:2]
         loss = loss.mean()
 
-        del x, attention_mask, token_type_ids
+        del x, attention_mask
+        if 'token_type_ids' in input_dict:
+            del token_type_ids
 
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         loss.backward()
@@ -681,26 +696,34 @@ class DiscriminativeTrainer(Trainer):
         elif len(batch) == 2:     #Hypotesis only
             H,labels = batch
             input_dict = self.tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
-        batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask', 'token_type_ids']]
-        x, attention_mask, token_type_ids = batch_encoded
+        batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
+        x, attention_mask = batch_encoded
         x = x.to(self.device)
         attention_mask = attention_mask.to(self.device)
-        token_type_ids = token_type_ids.to(self.device)
+        # token_type_ids = token_type_ids.to(self.device)
         labels = labels.to(self.device)
 
         model_kwargs = {
             "attention_mask": attention_mask,
-            "token_type_ids": token_type_ids,
+            # "token_type_ids": token_type_ids,
             "labels": labels
         }
+
+        if 'token_type_ids' in input_dict:
+            token_type_ids = input_dict['token_type_ids']
+            token_type_ids = token_type_ids.to(self.device)
+            model_kwargs['token_type_ids'] = token_type_ids
+        
         with torch.no_grad():
             outputs = self.model(input_ids=x, **model_kwargs)
 
-        loss, logits = outputs[:2]
-        loss = loss.mean()
+            loss, logits = outputs[:2]
+            loss = loss.mean()
 
-        del x, attention_mask, token_type_ids
-
+        del x, attention_mask
+        if 'token_type_ids' in input_dict:
+            del token_type_ids
+        # import pdb; pdb.set_trace()
         # check accuracy
         labels = labels.to('cpu')
         pred = torch.argmax(logits,dim=1).to('cpu')
