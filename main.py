@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Subset
 from transformers import AutoTokenizer, AdamW, AutoModel, \
 get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup, get_constant_schedule_with_warmup
 
-from src.data import PremiseGenerationDataset, DiscriminativeDataset
+from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset
 from src.models import get_model
 from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer
 from src.utils import FitResult, get_max_len
@@ -43,7 +43,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Training params
                    bs_train=32, bs_test=None, batches=100, epochs=100,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
-                   optimizer_type='Adam', momentum=0.9, word_dropout=0.0, tie_embeddings=False,
+                   optimizer_type='Adam', momentum=0.9, word_dropout=0.0,label_smoothing_epsilon=0.0,
+                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    **kw):
@@ -88,6 +89,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     size_train = batches * bs_train if batches > 0 else 10**8
 
     all_labels_text = list(set(test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
+    all_labels_text.sort()
     num_labels = len(all_labels_text)
 
     if model_type != 'discriminative':
@@ -112,7 +114,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         
         print(f'Setting max_len to: {max_len}')
 
-        all_labels_text.sort()
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
         tokenizer.add_tokens(all_labels)
@@ -128,14 +129,20 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     data_args = {}
     dataloader_args = {}
     train_args = {}
+    # import pdb; pdb.set_trace()
     if model_type in ['encode-decode','bart','shared']:
         dataset = PremiseGenerationDataset
         trainer_type = PremiseGeneratorTrainer
         data_args['tokenizer_decoder'] = tokenizer_decoder
+        data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
+        train_args['epsilon'] = label_smoothing_epsilon
         dataloader_args['collate_fn'] = my_collate
     elif model_type == 'discriminative':
-        dataset = DiscriminativeDataset
+        if hypothesis_only:
+            dataset = HypothesisOnlyDataset
+        else:
+            dataset = DiscriminativeDataset
         trainer_type = DiscriminativeTrainer
         train_args['num_labels'] = num_labels
         train_args['tokenizer'] = tokenizer
@@ -162,6 +169,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                         tie_embeddings=tie_embeddings)
 
     model.to(device)
+    # import pdb; pdb.set_trace()
     
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True, **dataloader_args)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
@@ -188,7 +196,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if do_test:
         trainer.test(dl_test,writer=writer)
         if len(hard_test_labels) > 0 and len(hard_test_lines) > 0:
-            ds_hard_test = PremiseGenerationDataset(hard_test_lines, hard_test_labels, tokenizer, tokenizer_decoder=tokenizer_decoder, max_len=max_len)
+            ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
             dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, collate_fn=my_collate)
@@ -199,7 +207,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name=None, seed=None,
                # Training params
                bs_test=None, batches=100,
-               checkpoints=None, max_len=0, decoder_max_len=0,
+               checkpoints=None, max_len=0, decoder_max_len=0, hypothesis_only=False, generate_hypothesis=False,
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -237,6 +245,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     size_test = batches * bs_test if batches > 0 else 10**8
 
     all_labels_text = list(set(test_labels[:size_test] + val_labels[:size_test] + hard_test_labels[:size_test]))
+    all_labels_text.sort()
     num_labels = len(all_labels_text)
 
     if model_type != 'discriminative':
@@ -261,7 +270,6 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         
         print(f'Setting max_len to: {max_len}')
 
-        all_labels_text.sort()
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
         tokenizer.add_tokens(all_labels)
@@ -277,17 +285,25 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {}
     dataloader_args = {}
     train_args = {}
+    # import pdb; pdb.set_trace()
     if model_type in ['encode-decode','bart','shared']:
         dataset = PremiseGenerationDataset
         trainer_type = PremiseGeneratorTrainer
         data_args['tokenizer_decoder'] = tokenizer_decoder
+        data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
+        train_args['epsilon'] = label_smoothing_epsilon
         dataloader_args['collate_fn'] = my_collate
     elif model_type == 'discriminative':
-        dataset = DiscriminativeDataset
+        if hypothesis_only:
+            dataset = HypothesisOnlyDataset
+        else:
+            dataset = DiscriminativeDataset
         trainer_type = DiscriminativeTrainer
         train_args['num_labels'] = num_labels
         train_args['tokenizer'] = tokenizer
+
+    # import pdb; pdb.set_trace()
 
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
@@ -397,8 +413,13 @@ def parse_cli():
                         help='Momentum for SGD', default=0.9)
     sp_exp.add_argument('--word-dropout', '-wdo', type=float,
                         help='Word dropout rate during training', default=0.0)
+    sp_exp.add_argument('--label-smoothing-epsilon', '-lse', type=float,
+                        help='Epsilon argument for label smoothing (does not uses labels smoothing by \
+                        default', default=0.0)
     sp_exp.add_argument('--tie-embeddings','-te', dest='tie_embeddings', action='store_true')
-    sp_exp.set_defaults(tie_embeddings=False)
+    sp_exp.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
+    sp_exp.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
+    sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -458,6 +479,9 @@ def parse_cli():
                          help='Checkpoint to torch model', default=None)
     sp_test.add_argument('--decoder-model-name', type=str,
                          help='Only if encoder and decoder are different', default=None)
+    sp_test.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
+    sp_test.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
+    sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False)
 
     parsed = p.parse_args()
 

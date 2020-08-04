@@ -74,12 +74,16 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
     elif 'discriminative'.startswith(model):
         from transformers import AutoModelForSequenceClassification
-        res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels)
+        if model_path is None:
+            res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels)
+        else:
+            # import pdb; pdb.set_trace()
+            res_model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
     else: 
         print(f"Please pick a valid model in {model_list}")
 
-    if model_path is None and not 'discriminitive'.startswith(model):          ## only change embeddings size if its not a trained model
+    if model_path is None and not 'discriminative'.startswith(model):          ## only change embeddings size if its not a trained model
         # import pdb; pdb.set_trace()
         res_model.resize_token_embeddings(len(tokenizer))
         

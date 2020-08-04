@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 class PremiseGenerationDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer_encoder, tokenizer_decoder=None, sep='|||', max_len=512,
-                dropout=0.0):
+                dropout=0.0, generate_hypothesis=False):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines
@@ -16,17 +16,22 @@ class PremiseGenerationDataset(Dataset):
         self.max_len = max_len
         self.size = len(self.lines)
         self.dropout = dropout
+        self.generate_hypothesis = generate_hypothesis
 
     def __getitem__(self, index):
 
         split = self.lines[index].split(self.sep)
 
-        inp = split[0]
-        tgt = split[1].replace('\n', '')
-        #
-        # target_input = "<START> " + tgt[:-1]
+        premise = split[0]                      # Premise
+        hypothesis = split[1].replace('\n', '')    # Hypothesis
 
-        sent = '[' + self.labels[index][:-1].upper().replace(' ', '') + '] ' + inp
+        if self.generate_hypothesis:
+            # import pdb; pdb.set_trace()
+            hypothesis, premise = premise, hypothesis
+        #
+        # target_input = "<START> " + premise[:-1]
+
+        sent = '[' + self.labels[index][:-1].upper().replace(' ', '') + '] ' + hypothesis
 
         # import pdb; pdb.set_trace()
 
@@ -36,7 +41,7 @@ class PremiseGenerationDataset(Dataset):
                                                 return_tensors='pt',
                                                 truncation=True,
                                                 )
-        target_dict = self.tokenizer_decoder.encode_plus(tgt,
+        target_dict = self.tokenizer_decoder.encode_plus(premise,
                                                 max_length=self.max_len,
                                                 pad_to_max_length=True,
                                                 return_tensors='pt',
@@ -44,7 +49,7 @@ class PremiseGenerationDataset(Dataset):
                                                 )
         # except Exception as e:
         #     print(e)
-        #     print(tgt)
+        #     print(premise)
         # import pdb; pdb.set_trace()
         def create_mask(inp, tokenizer):
             mask = torch.FloatTensor(*inp.shape).uniform_() > self.dropout
@@ -98,6 +103,7 @@ class DiscriminativeDataset(Dataset):
     
     def _labels_to_idx(self,labels):
         labels_ids = list(set(labels))
+        labels_ids.sort()
         res = [labels_ids.index(label) for label in labels]
         
         return res
@@ -106,38 +112,30 @@ class DiscriminativeDataset(Dataset):
 
         split = self.lines[index].split(self.sep)
 
-        inp = split[0]
-        tgt = split[1].replace('\n', '')
+        premise = split[0]
+        hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
 
-        # input_dict = self.tokenizer.encode_plus(inp, tgt,
-        #                                         max_length=self.max_len,
-        #                                         pad_to_max_length=True,
-        #                                         return_tensors='pt',
-        #                                         )
-
-        # res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
-
-        return (inp,tgt,lbl)
+        return (hypothesis,premise,lbl)        # H, P, y
 
     def __len__(self):
         return self.size
 
 class HypothesisOnlyDataset(Dataset):
 
-    def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512):
+    def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines
-        self.labels = _labels_to_idx(labels)
+        self.labels = self._labels_to_idx(labels)
         self.tokenizer = tokenizer
         self.sep = sep
         self.max_len = max_len
         self.size = len(self.lines)
 
-    @staticmethod    
-    def _labels_to_idx(labels):
+    def _labels_to_idx(self,labels):
         labels_ids = list(set(labels))
+        labels_ids.sort()
         res = [labels_ids.index(label) for label in labels]
         
         return res
@@ -146,19 +144,11 @@ class HypothesisOnlyDataset(Dataset):
 
         split = self.lines[index].split(self.sep)
 
-        inp = split[0]
-        # tgt = split[1].replace('\n', '')
+        # premise = split[0]
+        hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
 
-        # input_dict = self.tokenizer.encode_plus(inp,
-        #                                         max_length=self.max_len,
-        #                                         pad_to_max_length=True,
-        #                                         return_tensors='pt',
-        #                                         )
-
-        # res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']]
-
-        return (inp,lbl)
+        return (hypothesis,lbl)
 
     def __len__(self):
         return self.size
