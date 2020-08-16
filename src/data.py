@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+from numpy import random
 
 
 class PremiseGenerationDataset(Dataset):
@@ -100,6 +101,7 @@ class DiscriminativeDataset(Dataset):
         self.sep = sep
         self.max_len = max_len
         self.size = len(self.lines)
+        self.dropout = dropout
     
     def _labels_to_idx(self,labels):
         labels_ids = list(set(labels))
@@ -115,8 +117,14 @@ class DiscriminativeDataset(Dataset):
         premise = split[0]
         hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
+        
+        if self.dropout > 0.0:
+            hypothesis_splited = hypothesis.split()
+            hypothesis_splited = [(word if random.random() > self.dropout else self.tokenizer.unk_token)
+                                 for word in hypothesis_splited]
+            hypothesis = ' '.join(hypothesis_splited)
 
-        return (hypothesis,premise,lbl)        # H, P, y
+        return (premise,hypothesis,lbl)        # P, H, y
 
     def __len__(self):
         return self.size
@@ -152,3 +160,16 @@ class HypothesisOnlyDataset(Dataset):
 
     def __len__(self):
         return self.size
+
+
+class DualDataset(Dataset):
+    def __init__(self, datasetA, datasetB):
+        super().__init__()
+        self.datasetA = datasetA
+        self.datasetB = datasetB
+
+    def __getitem__(self,index):
+        return self.datasetA[index], self.datasetB[index]
+
+    def __len__(self):
+        return len(self.datasetA)

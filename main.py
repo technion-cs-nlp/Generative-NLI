@@ -10,9 +10,9 @@ from torch.utils.data import DataLoader, Subset
 from transformers import AutoTokenizer, AdamW, AutoModel, \
 get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup, get_constant_schedule_with_warmup
 
-from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset
-from src.models import get_model
-from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer
+from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
+from src.models import get_model, HybridModel
+from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer, DualTesterTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -80,8 +80,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             hard_test_lines = val_lines_file.readlines()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if 'gpt' in model_name:
+        tokenizer.pad_token = tokenizer.eos_token
     tokenizer_decoder = None
-    if decoder_model_name is not None:
+    if decoder_model_name is not None and 'gpt' in decoder_model_name:
         tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
         tokenizer_decoder.pad_token = tokenizer_decoder.eos_token
 
@@ -131,13 +133,15 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     train_args = {}
     # import pdb; pdb.set_trace()
     if model_type in ['encode-decode','bart','shared']:
-        dataset = PremiseGenerationDataset
+        dataset = DiscriminativeDataset
         trainer_type = PremiseGeneratorTrainer
-        data_args['tokenizer_decoder'] = tokenizer_decoder
-        data_args['generate_hypothesis'] = generate_hypothesis
+        # data_args['tokenizer_decoder'] = tokenizer_decoder
+        # data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
         train_args['epsilon'] = label_smoothing_epsilon
-        dataloader_args['collate_fn'] = my_collate
+        train_args['tokenizer_encoder'] = tokenizer
+        train_args['tokenizer_decoder'] = tokenizer_decoder
+        # dataloader_args['collate_fn'] = my_collate
     elif model_type == 'discriminative':
         if hypothesis_only:
             dataset = HypothesisOnlyDataset
@@ -237,8 +241,10 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             hard_test_lines = val_lines_file.readlines()
     # import pdb; pdb.set_trace()
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if 'gpt' in model_name:
+        tokenizer.pad_token = tokenizer.eos_token
     tokenizer_decoder = None
-    if decoder_model_name is not None:
+    if decoder_model_name is not None and 'gpt' in decoder_model_name:
         tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
         tokenizer_decoder.pad_token = tokenizer_decoder.eos_token
 
@@ -287,13 +293,14 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     train_args = {}
     # import pdb; pdb.set_trace()
     if model_type in ['encode-decode','bart','shared']:
-        dataset = PremiseGenerationDataset
+        dataset = DiscriminativeDataset
         trainer_type = PremiseGeneratorTrainer
-        data_args['tokenizer_decoder'] = tokenizer_decoder
-        data_args['generate_hypothesis'] = generate_hypothesis
+        # data_args['tokenizer_decoder'] = tokenizer_decoder
+        # data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
-        train_args['epsilon'] = label_smoothing_epsilon
-        dataloader_args['collate_fn'] = my_collate
+        train_args['tokenizer_encoder'] = tokenizer
+        train_args['tokenizer_decoder'] = tokenizer_decoder
+        # dataloader_args['collate_fn'] = my_collate
     elif model_type == 'discriminative':
         if hypothesis_only:
             dataset = HypothesisOnlyDataset
@@ -336,6 +343,87 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, **dataloader_args)
             fit_res = trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
             save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
+
+
+def combine_models( data_dir_prefix='./data/snli_1.0/cl_snli',bs_test=8,
+                    modelA_path=None, modelA_type=None, 
+                    modelA_name=None, modelB_path=None, 
+                    modelB_type=None, modelB_name=None, 
+                    gamma=0.5,hypothesis_only=False):
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    hard_test_labels = None
+    hard_test_lines = None
+
+    with open(data_dir_prefix + '_test_lbl_file') as test_labels_file:
+        test_labels = test_labels_file.readlines()
+    with open(data_dir_prefix + '_test_source_file') as test_lines_file:
+        test_lines = test_lines_file.readlines()
+    with open(data_dir_prefix + '_val_lbl_file') as val_labels_file:
+        val_labels = val_labels_file.readlines()
+    with open(data_dir_prefix + '_val_source_file') as val_lines_file:
+        val_lines = val_lines_file.readlines()
+    if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
+        os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
+        with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
+            hard_test_labels = val_labels_file.readlines()
+        with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
+            hard_test_lines = val_lines_file.readlines()
+
+    if modelB_type is None:
+        modelB_type = modelA_type
+    if modelB_name is None:
+        modelB_name = modelA_name
+
+    modelA = get_model(model=modelA_type, model_name=modelA_name, model_path=modelA_path)
+    modelB = get_model(model=modelB_type, model_name=modelB_name, model_path=modelB_path)
+    model = HybridModel(modelA,modelB,gamma)
+
+    model.to(device)
+
+    tokenizerA = AutoTokenizer.from_pretrained(modelA_name)
+
+    size_test = 10**8
+
+    all_labels_text = list(set(test_labels[:size_test] + val_labels[:size_test] + hard_test_labels[:size_test]))
+    all_labels_text.sort()
+    num_labels = len(all_labels_text)
+    all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
+
+    tokenizerA.add_tokens(all_labels)
+    labels_ids = [tokenizerA.encode(label, add_special_tokens=False)[0] for label in all_labels]
+    print(f'Labels IDs: {labels_ids}')
+
+    if modelA_name == modelB_name:
+        tokenizerB = tokenizerA
+    
+    else:
+        tokenizerB = AutoTokenizer.from_pretrained(modelB_name)
+        tokenizerB.add_tokens(all_labels)
+        labels_ids_decoder = [tokenizerB.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        print(f'Labels IDs for second model: {labels_ids_decoder}')
+
+    datasetA = PremiseGenerationDataset
+    DatasetA = datasetA(test_lines,test_labels,tokenizerA)
+
+    datasetB = HypothesisOnlyDataset if hypothesis_only else DiscriminativeDataset
+    DatasetB = datasetB(test_lines,test_labels,tokenizerB)
+
+    dataset = DualDataset(DatasetA,DatasetB)
+    dataloader = torch.utils.data.DataLoader(dataset, bs_test, shuffle=False)
+
+    trainer = DualTesterTrainer(model, tokenizer=tokenizerB, optimizer=None, scheduler=None, max_len=128, num_labels=3, possible_labels_ids=labels_ids, device=device)
+    trainer.test(dataloader)
+
+    if hard_test_labels is not None and hard_test_lines is not None:
+            ds_hard_testA = datasetA(hard_test_lines, hard_test_labels, tokenizerA)
+            ds_hard_testB = datasetB(hard_test_lines, hard_test_labels, tokenizerB)
+
+            ds_hard_test = DualDataset(ds_hard_testA, ds_hard_testB)
+            
+            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
+            trainer.test(dl_hard_test)
 
 
 def save_experiment(run_name, out_dir, config, fit_res):
@@ -482,6 +570,29 @@ def parse_cli():
     sp_test.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
     sp_test.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
     sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False)
+
+    sp_comb = sp.add_parser('combine', help='Combine two models (only testing)')
+    sp_comb.set_defaults(subcmd_fn=combine_models)
+    sp_comb.add_argument('--data-dir-prefix', type=str,
+                        help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
+    sp_comb.add_argument('--modelA-path', '-map', type=str,
+                         help='Path of the first model', required=True)
+    sp_comb.add_argument('--modelB-path', '-mbp', type=str,
+                         help='Path of the second model', required=True)
+    sp_comb.add_argument('--modelA-type', '-mat', type=str,
+                         help='Type of the first model', required=True)
+    sp_comb.add_argument('--modelB-type', '-mbt', type=str,
+                         help='Type of the second model', default=None)
+    sp_comb.add_argument('--modelA-name', '-man', type=str,
+                         help='Name of the first model', required=True)
+    sp_comb.add_argument('--modelB-name', '-mbn', type=str,
+                         help='Name of the second model', default=None)
+    sp_comb.add_argument('--bs-test', '-bst', type=int,
+                         help='Test batch size', default=8)
+    sp_comb.add_argument('--gamma', '-g', type=float,
+                         help='Gamma value', default=0.5)
+    sp_comb.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
+    sp_comb.set_defaults(hypothesis_only=False)
 
     parsed = p.parse_args()
 

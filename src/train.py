@@ -14,6 +14,81 @@ from src.loss import LabelSmoothingCrossEntropy
 
 # return_acc = False
 
+def create_args_generative(batch,labels,device):
+    x, encoder_attention_mask, y, decoder_attention_mask = batch
+    
+    label_loc=1
+    correct_labels = x[:, label_loc].clone()
+    total_loss = torch.zeros(1, dtype=float)
+    pred = []
+
+    batch_size = x.size(0)
+
+    inp_x = []
+    inp_y = []
+    inp_e_a_m = []
+    inp_d_a_m = []
+    # inp_d_e_a_m = []
+
+    for label_id in labels:
+        curr_x = x.clone()
+        curr_x[:, label_loc] = label_id
+        inp_x.append(curr_x)
+        inp_y.append(y)
+        inp_e_a_m.append(encoder_attention_mask)
+        inp_d_a_m.append(decoder_attention_mask)
+        # inp_d_e_a_m.append(decoder_encoder_attention_mask)
+
+    inp_x = torch.cat(inp_x)
+    inp_y = torch.cat(inp_y)
+    inp_e_a_m = torch.cat(inp_e_a_m)
+    inp_d_a_m = torch.cat(inp_d_a_m)
+    # inp_d_e_a_m = torch.cat(inp_d_e_a_m)
+
+    inp_x = inp_x.to(device)
+    inp_y = inp_y.to(device)
+    inp_e_a_m = inp_e_a_m.to(device)
+    inp_d_a_m = inp_d_a_m.to(device)
+    # inp_d_e_a_m = inp_d_e_a_m.to(self.device)
+
+    model_kwargs = {
+        "input_ids": inp_x, 
+        "decoder_input_ids": inp_y,
+        "attention_mask": inp_e_a_m,
+        "decoder_attention_mask": inp_d_a_m,
+        "labels": inp_y
+    }
+
+    return model_kwargs
+
+def create_args_discriminitive(batch,tokenizer,device):
+    if len(batch) == 3:         # H, P, y
+        H,P,labels = batch
+        input_dict = tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], pad_to_max_length=True, return_tensors='pt')
+    elif len(batch) == 2:     #Hypotesis only
+        H,labels = batch
+        input_dict = tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+    batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
+    x, attention_mask = batch_encoded
+    x = x.to(device)
+    attention_mask = attention_mask.to(device)
+    # token_type_ids = token_type_ids.to(self.device)
+    labels = labels.to(device)
+
+    model_kwargs = {
+        "input_ids": x,
+        "attention_mask": attention_mask,
+        # "token_type_ids": token_type_ids,
+        "labels": labels
+    }
+
+    if 'token_type_ids' in input_dict:
+        token_type_ids = input_dict['token_type_ids']
+        token_type_ids = token_type_ids.to(device)
+        model_kwargs['token_type_ids'] = token_type_ids
+
+    return model_kwargs
+
 
 class Trainer(abc.ABC):
     """
@@ -352,16 +427,38 @@ class Trainer(abc.ABC):
 
 class PremiseGeneratorTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
-                epsilon=0.0, device=None):
+                epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, device=None):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
-        # self.tokenizer = tokenizer
+        self.tokenizer_encoder = tokenizer_encoder
+        self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
         self.max_len = max_len
         self.last_freeze_loss = None
         self.freeze_ratio = 0.0
         self.num_layers = len(list(self.model.modules()))
         self.labels = possible_labels_ids
         self.epsilon = epsilon
+
+    def _prepare_batch(self,batch):
+        P,H,labels = batch
+        input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+        x = input_dict_encoder['input_ids']
+        bos = x[:,0]
+        rest = x[:,1:]
+        labels_tokens = labels + min(self.labels)
+        input_dict_encoder['input_ids'] = \
+                torch.cat([bos.unsqueeze(0), labels_tokens.unsqueeze(0), rest.T]).T
+        # import pdb; pdb.set_trace()
+        input_dict_encoder['attention_mask'] = \
+            torch.cat([torch.ones(size=(1,x.shape[0]), dtype=int), input_dict_encoder['attention_mask'].T]).T
+
+        
+        input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, pad_to_max_length=True, return_tensors='pt')
+        
+        batch = input_dict_encoder['input_ids'], input_dict_encoder['attention_mask'], \
+                input_dict_decoder['input_ids'], input_dict_decoder['attention_mask']
+
+        return batch
 
     def train_epoch(self, dl_train: DataLoader, **kw):
         return super().train_epoch(dl_train, **kw)
@@ -370,13 +467,15 @@ class PremiseGeneratorTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        if self.epsilon > 0.0:
+        if self.epsilon != 0.0:
             return self.train_batch_label_smoothing(batch)
         else:
             return self.train_batch_normal(batch)
 
     def train_batch_normal(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = batch
+        # import pdb; pdb.set_trace()
+
+        x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
         x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
@@ -456,7 +555,7 @@ class PremiseGeneratorTrainer(Trainer):
         return BatchResult(loss_item, num_correct)
 
     def train_batch_label_smoothing(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = batch
+        x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
 
         n_labels = len(self.labels)
        
@@ -519,7 +618,7 @@ class PremiseGeneratorTrainer(Trainer):
         for i in range(1,n_labels):
             indices = (l_idx + i) % n_labels        # next location
             loss_obj += (self.epsilon / n_labels) * loss.view(n_labels,-1).T.gather(1,indices.view(-1,1))
-
+        loss_obj[loss_obj < 0.0]=0.0    # no negative 
         loss_obj = loss_obj.mean()
 
         loss_obj.backward()
@@ -545,9 +644,13 @@ class PremiseGeneratorTrainer(Trainer):
         return BatchResult(tot, num_correct.item())
 
     def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = batch
-       
-        correct_labels = x[:, 1].clone()
+        
+        x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
+        if x[0,1] in self.labels:
+            label_loc=1
+        else:
+            label_loc=0
+        correct_labels = x[:, label_loc].clone()
         total_loss = torch.zeros(1, dtype=float)
         pred = []
 
@@ -561,7 +664,7 @@ class PremiseGeneratorTrainer(Trainer):
 
         for label_id in self.labels:
             curr_x = x.clone()
-            curr_x[:, 1] = label_id
+            curr_x[:, label_loc] = label_id
             inp_x.append(curr_x)
             inp_y.append(y)
             inp_e_a_m.append(encoder_attention_mask)
@@ -585,6 +688,7 @@ class PremiseGeneratorTrainer(Trainer):
             "decoder_attention_mask": inp_d_a_m,
             "labels": inp_y
         }
+        # import pdb; pdb.set_trace()
         with torch.no_grad():
             outputs = self.model(input_ids=inp_x, decoder_input_ids=inp_y, **model_kwargs)
             loss = outputs[0]
@@ -636,9 +740,9 @@ class DiscriminativeTrainer(Trainer):
 
     def train_batch(self, batch) -> BatchResult:
         # import pdb; pdb.set_trace()
-        if len(batch) == 3:         # H, P, y
-            H,P,labels = batch
-            input_dict = self.tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], pad_to_max_length=True, return_tensors='pt')
+        if len(batch) == 3:         # P, H, y
+            P,H,labels = batch
+            input_dict = self.tokenizer.batch_encode_plus([[P[i],H[i]] for i in range(len(P))], pad_to_max_length=True, return_tensors='pt')
         elif len(batch) == 2:     #Hypotesis only
             H,labels = batch
             input_dict = self.tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
@@ -734,3 +838,52 @@ class DiscriminativeTrainer(Trainer):
 
         del loss
         return BatchResult(loss_item, num_correct.item())
+
+
+class DualTesterTrainer(Trainer):
+    def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, 
+                tokenizer=None, possible_labels_ids=None, device=None):
+        super().__init__(model, None, optimizer, scheduler, device)
+        # self.evaluator = evaluator
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+        self.last_freeze_loss = None
+        self.freeze_ratio = 0.0
+        self.labels = possible_labels_ids
+
+    def train_epoch(self, dl_train: DataLoader, **kw):
+        return super().train_epoch(dl_train, **kw)
+
+    def test_epoch(self, dl_test: DataLoader, **kw):
+        return super().test_epoch(dl_test, **kw)
+
+    def train_batch(self, batch) -> BatchResult:
+        pass
+
+    def test_batch(self, batch) -> BatchResult:
+        batchA, batchB = batch
+        model_kwargsA = create_args_generative(batchA, self.labels, self.device)
+        model_kwargsB = create_args_discriminitive(batchB,self.tokenizer, self.device)
+
+        correct_labels = batchB[-1]
+        
+        with torch.no_grad():
+            outputs = self.model(model_kwargsA,model_kwargsB)
+
+            loss = outputs
+            # loss = loss.mean()
+
+        ret = torch.min(loss,dim=0)
+        pred = ret.indices
+        losses = ret.values
+                
+        # total_loss = losses.sum()
+
+        # pred = torch.tensor([self.labels[i] for i in pred])
+        # import pdb; pdb.set_trace()
+        pred = pred.to('cpu')
+        correct_labels = correct_labels.to('cpu')
+        num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
+
+        tot = losses.mean().item()
+        return BatchResult(tot, num_correct.item())

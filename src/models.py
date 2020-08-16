@@ -1,5 +1,37 @@
 import torch.nn as nn
 import os
+import torch
+
+class HybridModel(nn.Module):
+    def __init__(self, modelA, modelB, gamma):
+        super().__init__()
+        self.modelA = modelA
+        self.modelB = modelB
+        self.gamma = gamma
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    def forward(self, argsA, argsB):
+        batch_size = argsA['input_ids'].size(0)
+        # import pdb; pdb.set_trace()
+        # self.modelA.to(self.device)
+        resA = self.modelA(**argsA)
+        # self.modelA.cpu()
+        # self.modelB.to(self.device)
+        resB = self.modelB(**argsB)
+        # self.modelB.cpu()
+        lossA = resA[0]
+        lossA = lossA.view(batch_size, -1)
+        lossA = lossA.mean(dim=1)
+        lossA = lossA.view(3,-1)
+        lossA = resB[0]
+        lossB = lossB.view(batch_size, -1)
+        lossB = lossB.mean(dim=1)
+        lossB = lossB.view(3,-1)
+        res = (1 - self.gamma)*lossA + (self.gamma)*lossB
+        # import pdb; pdb.set_trace()
+
+        return res
+
 
 def freeze_params(params, ratio):
     for idx, param in enumerate(params):
