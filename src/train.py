@@ -64,10 +64,10 @@ def create_args_generative(batch,labels,device):
 def create_args_discriminitive(batch,tokenizer,device):
     if len(batch) == 3:         # H, P, y
         H,P,labels = batch
-        input_dict = tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], pad_to_max_length=True, return_tensors='pt')
+        input_dict = tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], padding='longest', return_tensors='pt')
     elif len(batch) == 2:     #Hypotesis only
         H,labels = batch
-        input_dict = tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+        input_dict = tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt')
     batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
     x, attention_mask = batch_encoded
     x = x.to(device)
@@ -441,7 +441,7 @@ class PremiseGeneratorTrainer(Trainer):
 
     def _prepare_batch(self,batch):
         P,H,labels = batch
-        input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+        input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
         x = input_dict_encoder['input_ids']
         bos = x[:,0]
         rest = x[:,1:]
@@ -453,7 +453,7 @@ class PremiseGeneratorTrainer(Trainer):
             torch.cat([torch.ones(size=(1,x.shape[0]), dtype=int), input_dict_encoder['attention_mask'].T]).T
 
         
-        input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, pad_to_max_length=True, return_tensors='pt')
+        input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, padding='longest', return_tensors='pt')
         
         batch = input_dict_encoder['input_ids'], input_dict_encoder['attention_mask'], \
                 input_dict_decoder['input_ids'], input_dict_decoder['attention_mask']
@@ -742,10 +742,10 @@ class DiscriminativeTrainer(Trainer):
         # import pdb; pdb.set_trace()
         if len(batch) == 3:         # P, H, y
             P,H,labels = batch
-            input_dict = self.tokenizer.batch_encode_plus([[P[i],H[i]] for i in range(len(P))], pad_to_max_length=True, return_tensors='pt')
+            input_dict = self.tokenizer.batch_encode_plus([[P[i],H[i]] for i in range(len(P))], padding='longest', return_tensors='pt')
         elif len(batch) == 2:     #Hypotesis only
             H,labels = batch
-            input_dict = self.tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+            input_dict = self.tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt')
         # import pdb; pdb.set_trace()
         batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
         x, attention_mask = batch_encoded
@@ -796,10 +796,10 @@ class DiscriminativeTrainer(Trainer):
     def test_batch(self, batch) -> BatchResult:
         if len(batch) == 3:         # H, P, y
             H,P,labels = batch
-            input_dict = self.tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], pad_to_max_length=True, return_tensors='pt')
+            input_dict = self.tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], padding='longest', return_tensors='pt')
         elif len(batch) == 2:     #Hypotesis only
             H,labels = batch
-            input_dict = self.tokenizer.batch_encode_plus(H, pad_to_max_length=True, return_tensors='pt')
+            input_dict = self.tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt')
         batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
         x, attention_mask = batch_encoded
         x = x.to(self.device)

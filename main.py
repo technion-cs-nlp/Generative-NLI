@@ -95,26 +95,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     num_labels = len(all_labels_text)
 
     if model_type != 'discriminative':
-        if max_len == 0:
-            max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
-                                '|||', tokenizer)
-            print(f'Longest Sequence is: {max_len} token_ids')
-            max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-        max_len = int(max_len)
-
-        if decoder_max_len == 0:
-            if tokenizer_decoder is not None:
-                decoder_max_len = get_max_len(test_lines[:size_test] + train_lines[:size_train] + val_lines[:size_test] + hard_test_lines[:size_test],
-                                '|||', tokenizer_decoder)
-                print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
-                decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-            else:
-                decoder_max_len = max_len
-        decoder_max_len = int(decoder_max_len)
-
-        max_len = max(max_len, decoder_max_len)
-        
-        print(f'Setting max_len to: {max_len}')
 
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
@@ -255,26 +235,6 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     num_labels = len(all_labels_text)
 
     if model_type != 'discriminative':
-        if max_len == 0:
-            max_len = get_max_len(test_lines[:size_test] + val_lines[:size_test] + hard_test_lines[:size_test],
-                                '|||', tokenizer)
-            print(f'Longest Sequence is: {max_len} token_ids')
-            max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-        max_len = int(max_len)
-
-        if decoder_max_len == 0:
-            if tokenizer_decoder is not None:
-                decoder_max_len = get_max_len(test_lines[:size_test] + val_lines[:size_test] + hard_test_lines[:size_test],
-                                '|||', tokenizer_decoder)
-                print(f'Longest Sequence for decoder is: {decoder_max_len} token_ids')
-                decoder_max_len = math.pow(2, math.ceil(math.log(max_len, 2)))
-            else:
-                decoder_max_len = max_len
-        decoder_max_len = int(decoder_max_len)
-
-        max_len = max(max_len, decoder_max_len)
-        
-        print(f'Setting max_len to: {max_len}')
 
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
