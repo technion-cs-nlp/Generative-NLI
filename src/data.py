@@ -1,6 +1,25 @@
 import torch
 from torch.utils.data import Dataset
-from numpy import random
+import numpy as np
+import contextlib
+
+@contextlib.contextmanager
+def temp_state(state_t):
+    state = np.random.get_state()
+    np.random.set_state(state_t)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
+
+@contextlib.contextmanager
+def temp_seed(seed):
+    state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
 
 
 class PremiseGenerationDataset(Dataset):
@@ -92,7 +111,8 @@ class PremiseGenerationDataset(Dataset):
 
 class DiscriminativeDataset(Dataset):
 
-    def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0):
+    def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0, 
+                inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start', seed=42):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines
@@ -102,6 +122,12 @@ class DiscriminativeDataset(Dataset):
         self.max_len = max_len
         self.size = len(self.lines)
         self.dropout = dropout
+        self.inject_bias = inject_bias
+        self.bias_id = bias_id
+        self.bias_ratio = bias_ratio
+        self.bias_location = bias_location
+        with temp_seed(seed):
+            self.state = np.random.get_state()
     
     def _labels_to_idx(self,labels):
         labels_ids = list(set(labels))
@@ -117,13 +143,33 @@ class DiscriminativeDataset(Dataset):
         premise = split[0]
         hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
+
+        if self.inject_bias > lbl:
+            with temp_seed(index):                                  # stay the same for every epoch
+                if np.random.random() < self.bias_ratio:            # randomally add bias
+                    hypothesis_splited = hypothesis.split()
+                    if self.bias_location == 'start':
+                        idx = 0
+                    elif self.bias_location == 'end':
+                        idx = 500
+                    else:       ## random location
+                        idx = np.random.randint(len(hypothesis_splited))
+                    # import pdb; pdb.set_trace()
+                    hypothesis_splited = hypothesis_splited[0:idx] + [self.tokenizer.decode(self.bias_id + lbl.item())] + hypothesis_splited[idx:]
+                    hypothesis = ' '.join(hypothesis_splited)         
         
         if self.dropout > 0.0:
+            premise_splited = premise.split()
+            premise_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
+                                for word in premise_splited]
+            premise = ' '.join(premise_splited)
+
             hypothesis_splited = hypothesis.split()
-            hypothesis_splited = [(word if random.random() > self.dropout else self.tokenizer.unk_token)
-                                 for word in hypothesis_splited]
+            hypothesis_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
+                                for word in hypothesis_splited]
             hypothesis = ' '.join(hypothesis_splited)
 
+        # import pdb; pdb.set_trace()
         return (premise,hypothesis,lbl)        # P, H, y
 
     def __len__(self):
@@ -131,7 +177,7 @@ class DiscriminativeDataset(Dataset):
 
 class HypothesisOnlyDataset(Dataset):
 
-    def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0):
+    def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0, **kw):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines

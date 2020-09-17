@@ -18,35 +18,20 @@ import math
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim.sgd import SGD
 
-def my_collate(batch):
-    # import pdb; pdb.set_trace()
-    batch = tuple(map(list,zip(*batch)))
-    x, encoder_attention_mask, y, decoder_attention_mask = [torch.stack(batch[i]) for i in range(4)]
-    e_trim = (encoder_attention_mask>0).nonzero()[:,-1].max()
-    d_trim = (decoder_attention_mask>0).nonzero()[:,-1].max()
-
-    trim = max(e_trim,d_trim)
-    
-    return x[:,:trim], encoder_attention_mask[:,:trim], y[:,:trim], decoder_attention_mask[:,:trim]
-
-def my_collate_disc(batch):
-    # import pdb; pdb.set_trace()
-    batch = tuple(map(list,zip(*batch)))
-    x, attention_mask, labels = [torch.stack(batch[i]) for i in range(3)]
-    trim = (attention_mask>0).nonzero()[:,-1].max()
-    
-    return x[:,:trim], attention_mask[:,:trim], labels
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli', model_path=None,
-                   model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name='gpt2', seed=None,
+                   model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name=None, seed=None,
                    drive=False, do_test=True,
                    # Training params
-                   bs_train=32, bs_test=None, batches=100, epochs=100,
+                   bs_train=32, bs_test=None, batches=0, epochs=20,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0,label_smoothing_epsilon=0.0,
                    tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
+                   ret_res=False,
+                   # Dataset params
+                   inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start',
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -81,7 +66,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if 'gpt' in model_name:
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token = tokenizer.unk_token
     tokenizer_decoder = None
     if decoder_model_name is not None and 'gpt' in decoder_model_name:
         tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
@@ -101,10 +86,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         tokenizer.add_tokens(all_labels)
         labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
         print(f'Labels IDs: {labels_ids}')
-        if tokenizer_decoder is not None:
-            tokenizer_decoder.add_tokens(all_labels)
-            labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
-            print(f'Labels IDs for decoder: {labels_ids_decoder}')
+        # if tokenizer_decoder is not None:
+        #     tokenizer_decoder.add_tokens(all_labels)
+        #     labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        #     print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
     dataset = None
     trainer_type = None
@@ -115,6 +100,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
         trainer_type = PremiseGeneratorTrainer
+        #inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start'
         # data_args['tokenizer_decoder'] = tokenizer_decoder
         # data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
@@ -133,12 +119,19 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
-    data_args['dropout'] = word_dropout
+    # data_args['dropout'] = word_dropout
+    data_args.update({
+        'inject_bias':inject_bias,
+        'bias_id':bias_id,
+        'bias_ratio':bias_ratio,
+        'bias_location':bias_location,
+        'dropout':word_dropout
+    })
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
 
     if batches > 0:
-        ds_test = Subset(ds_test, range(batches * bs_test))
-        ds_val = Subset(ds_val, range(batches * bs_test))
+        # ds_test = Subset(ds_test, range(batches * bs_test))
+        # ds_val = Subset(ds_val, range(batches * bs_test))
         ds_train = Subset(ds_train, range(batches * bs_train))
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -169,12 +162,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     num_batches = batches if batches > 0 else len(dl_train)
     num_steps = epochs * num_batches
     print(f"Number of training steps: {num_steps}")
-    scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches, num_training_steps=num_steps)
     writer = SummaryWriter()
 
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
+
+    if ret_res:
+        del model
+        return fit_res.test_acc[-4] if len(fit_res.test_acc) >=4 else fit_res.test_acc[-1]
     save_experiment(run_name, out_dir, cfg, fit_res)
 
     if do_test:
@@ -183,14 +180,14 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
-            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, collate_fn=my_collate)
+            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
             trainer.test(dl_hard_test, writer=writer)
 
 
 def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_1.0/cl_snli',
                model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name=None, seed=None,
                # Training params
-               bs_test=None, batches=100,
+               bs_test=None, batches=0,
                checkpoints=None, max_len=0, decoder_max_len=0, hypothesis_only=False, generate_hypothesis=False,
                **kw):
     if not seed:
@@ -241,10 +238,10 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         tokenizer.add_tokens(all_labels)
         labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
         print(f'Labels IDs: {labels_ids}')
-        if tokenizer_decoder is not None:
-            tokenizer_decoder.add_tokens(all_labels)
-            labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
-            print(f'Labels IDs for decoder: {labels_ids_decoder}')
+        # if tokenizer_decoder is not None:
+        #     tokenizer_decoder.add_tokens(all_labels)
+        #     labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        #     print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
     dataset = None
     trainer_type = None
@@ -426,17 +423,26 @@ def parse_cli():
     sp_exp.add_argument('--drive', '-d', type=bool, help='Pass "True" if you are running this on Google Colab',
                         default=False, required=False)
     sp_exp.add_argument('--do-test', '-t', type=bool, help='Pass "True" if you want to run a test on test set',
-                        default=True, required=False)                    
-
+                        default=True, required=False)   
+    # # Dataset
+    #inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start', seed=42                 
+    sp_exp.add_argument('--inject-bias', type=int, help='Select number of labels to inject bias to their corresponding hypotheses',
+                        default=0)
+    sp_exp.add_argument('--bias-id', type=int, help='Select the id of the biases symbols',
+                        default=30000)
+    sp_exp.add_argument('--bias-ratio', type=float, help='Select the percentege of labels to inject bias to their corresponding hypotheses',
+                        default=0.5)
+    sp_exp.add_argument('--bias-location', type=str, help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
+                        default='start')
     # # Training
     sp_exp.add_argument('--bs-train', type=int, help='Train batch size',
                         default=128, metavar='BATCH_SIZE')
     sp_exp.add_argument('--bs-test', type=int, help='Test batch size',
                         metavar='BATCH_SIZE')
     sp_exp.add_argument('--batches', type=int,
-                        help='Number of batches per epoch', default=100)
+                        help='Number of batches per epoch', default=0)
     sp_exp.add_argument('--epochs', type=int,
-                        help='Maximal number of epochs', default=100)
+                        help='Maximal number of epochs', default=20)
     sp_exp.add_argument('--early-stopping', type=int,
                         help='Stop after this many epochs without '
                              'improvement', default=3)
@@ -508,7 +514,7 @@ def parse_cli():
     sp_test.add_argument('--bs-test', type=int, help='Test batch size',
                          metavar='BATCH_SIZE')
     sp_test.add_argument('--batches', type=int,
-                         help='Number of batches per epoch, pass "0" if you want the full database', default=100)
+                         help='Number of batches per epoch, pass "0" if you want the full database', default=0)
     sp_test.add_argument('--data-dir-prefix', type=str,
                          help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
     sp_test.add_argument('--max-len', type=int,

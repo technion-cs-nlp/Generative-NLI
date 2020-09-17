@@ -63,7 +63,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         if model_path is None:
             res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name)
             res_model.encoder.resize_token_embeddings(len(tokenizer))
-            res_model.decoder.resize_token_embeddings(len(tokenizer_decoder))
+            # res_model.decoder.resize_token_embeddings(len(tokenizer_decoder))
 
             if tie_embeddings:
                 res_model.decoder.cls.predictions.decoder.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
@@ -97,7 +97,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
             res_model = EncoderDecoderModel(encoder=encoder, decoder=decoder)
             res_model.encoder.resize_token_embeddings(len(tokenizer))
-            res_model.decoder.resize_token_embeddings(len(tokenizer))
+            # res_model.decoder.resize_token_embeddings(len(tokenizer))
         else:
             from transformers import EncoderDecoderModel
             res_model = EncoderDecoderModel.from_pretrained(model_path)
