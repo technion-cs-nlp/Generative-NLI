@@ -7,3 +7,6 @@ runs/*
 BPE/snli
 BPE/snli_train
 BPE/temp
+*.res
+*.res_hard
+*.npy
