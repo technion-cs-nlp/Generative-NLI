@@ -4,6 +4,8 @@ import os
 import random
 import sys
 
+import numpy as np
+
 import torch
 import torchvision
 from torch.utils.data import DataLoader, Subset
@@ -12,7 +14,7 @@ get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_war
 
 from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
 from src.models import get_model, HybridModel
-from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer, DualTesterTrainer
+from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer, DualTesterTrainer, OnelabelTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -31,7 +33,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    ret_res=False,
                    # Dataset params
-                   inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start',
+                   inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', label=None,
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -79,6 +81,14 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     all_labels_text.sort()
     num_labels = len(all_labels_text)
 
+    if label is not None:
+        if model_type.startswith('disc'):
+            raise AttributeError("Can't specify label with discriminative model")
+        train_lines = np.array(train_lines)[np.array(train_labels)==all_labels_text[label]].tolist()
+        train_labels = np.array(train_labels)[np.array(train_labels)==all_labels_text[label]].tolist()
+        val_lines = np.array(val_lines)[np.array(val_labels)==all_labels_text[label]].tolist()
+        val_labels = np.array(val_labels)[np.array(val_labels)==all_labels_text[label]].tolist()        
+
     if model_type != 'discriminative':
 
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
@@ -99,8 +109,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     # import pdb; pdb.set_trace()
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
-        trainer_type = PremiseGeneratorTrainer
-        #inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start'
+        if label is None:
+            trainer_type = PremiseGeneratorTrainer
+        else:
+            trainer_type = OnelabelTrainer
+            train_args['label'] = label
+        #inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start'
         # data_args['tokenizer_decoder'] = tokenizer_decoder
         # data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
@@ -122,7 +136,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     # data_args['dropout'] = word_dropout
     data_args.update({
         'inject_bias':inject_bias,
-        'bias_id':bias_id,
+        'bias_ids':bias_ids,
         'bias_ratio':bias_ratio,
         'bias_location':bias_location,
         'dropout':word_dropout
@@ -143,7 +157,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                         decoder_model_name=decoder_model_name, 
                         model_path=model_path, 
                         param_freezing_ratio=param_freezing_ratio,
-                        tie_embeddings=tie_embeddings)
+                        tie_embeddings=tie_embeddings,
+                        label=label)
 
     model.to(device)
     # import pdb; pdb.set_trace()
@@ -185,10 +200,11 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
 
 def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_1.0/cl_snli',
-               model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name=None, seed=None,
+               model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name=None, seed=None, save_results=None,
                # Training params
                bs_test=None, batches=0,
-               checkpoints=None, max_len=0, decoder_max_len=0, hypothesis_only=False, generate_hypothesis=False,
+               checkpoints=None, max_len=0, decoder_max_len=0, 
+               hypothesis_only=False, generate_hypothesis=False, create_premises=False, label=0,
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -219,11 +235,11 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     # import pdb; pdb.set_trace()
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if 'gpt' in model_name:
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token = tokenizer.unk_token
     tokenizer_decoder = None
     if decoder_model_name is not None and 'gpt' in decoder_model_name:
         tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
-        tokenizer_decoder.pad_token = tokenizer_decoder.eos_token
+        tokenizer_decoder.pad_token = tokenizer_decoder.unk_token
 
     size_test = batches * bs_test if batches > 0 else 10**8
 
@@ -251,12 +267,17 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     # import pdb; pdb.set_trace()
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
-        trainer_type = PremiseGeneratorTrainer
+        if label is None:
+            trainer_type = PremiseGeneratorTrainer
+        else:
+            trainer_type = OnelabelTrainer
         # data_args['tokenizer_decoder'] = tokenizer_decoder
         # data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
         train_args['tokenizer_encoder'] = tokenizer
         train_args['tokenizer_decoder'] = tokenizer_decoder
+        train_args['create_premises'] = create_premises
+        train_args['save_results'] = save_results
         # dataloader_args['collate_fn'] = my_collate
     elif model_type == 'discriminative':
         if hypothesis_only:
@@ -294,6 +315,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_labels is not None and hard_test_lines is not None:
+            if trainer.save_results is not None:
+                trainer.save_results += '_hard'
             ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
@@ -425,11 +448,11 @@ def parse_cli():
     sp_exp.add_argument('--do-test', '-t', type=bool, help='Pass "True" if you want to run a test on test set',
                         default=True, required=False)   
     # # Dataset
-    #inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start', seed=42                 
+    #inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', seed=42                 
     sp_exp.add_argument('--inject-bias', type=int, help='Select number of labels to inject bias to their corresponding hypotheses',
                         default=0)
-    sp_exp.add_argument('--bias-id', type=int, help='Select the id of the biases symbols',
-                        default=30000)
+    sp_exp.add_argument('--bias-ids', type=list, help='Select the id of the biases symbols',
+                        default=[2870,2874,2876])
     sp_exp.add_argument('--bias-ratio', type=float, help='Select the percentege of labels to inject bias to their corresponding hypotheses',
                         default=0.5)
     sp_exp.add_argument('--bias-location', type=str, help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
@@ -473,6 +496,8 @@ def parse_cli():
     sp_exp.add_argument('--tie-embeddings','-te', dest='tie_embeddings', action='store_true')
     sp_exp.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
     sp_exp.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
+    sp_exp.add_argument('--label', '-l', type=int,
+                        help='Create generative model only for one label', default=None)
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False)
 
     # # Model
@@ -509,6 +534,8 @@ def parse_cli():
                          default=None, required=False)
     sp_test.add_argument('--drive', '-d', type=bool, help='Pass "True" if you are running this on Google Colab',
                          default=False, required=False)
+    sp_test.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
+                         default=None, required=False)
 
     # # Inference
     sp_test.add_argument('--bs-test', type=int, help='Test batch size',
@@ -521,6 +548,8 @@ def parse_cli():
                          help='Length of longest sequence (or bigger), 0 if you don\'t know', default=0)
     sp_test.add_argument('--decoder-max-len', '-dml', type=int,
                         help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
+    sp_test.add_argument('--create-premises','-cp', dest='create_premises', action='store_true')
+    sp_test.set_defaults(create_premises=False)
     
     # # Model
     sp_test.add_argument('--model-name', type=str,
@@ -533,6 +562,8 @@ def parse_cli():
                          help='Checkpoint to torch model', default=None)
     sp_test.add_argument('--decoder-model-name', type=str,
                          help='Only if encoder and decoder are different', default=None)
+    sp_test.add_argument('--label', '-l', type=int,
+                        help='Create generative model only for one label', default=None)
     sp_test.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
     sp_test.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
     sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False)

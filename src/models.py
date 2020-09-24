@@ -41,7 +41,8 @@ def freeze_params(params, ratio):
 
 def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None,
             tokenizer_decoder=None, decoder_model_name=None, 
-            model_path=None, param_freezing_ratio=0.0, num_labels=3, tie_embeddings=False):
+            model_path=None, param_freezing_ratio=0.0, num_labels=3, tie_embeddings=False,
+            label=None):
     res_model = None
     if tokenizer is None:
         from transformers import AutoTokenizer
@@ -57,20 +58,37 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
         encoder_model_name, decoder_model_name = (model_name, decoder_model_name)
 
-        if tokenizer_decoder is None:
-            tokenizer_decoder = tokenizer
+        # if tokenizer_decoder is None:
+        #     tokenizer_decoder = tokenizer
 
         if model_path is None:
             res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name)
-            res_model.encoder.resize_token_embeddings(len(tokenizer))
+            if label is None:
+                res_model.encoder.resize_token_embeddings(len(tokenizer))
             # res_model.decoder.resize_token_embeddings(len(tokenizer_decoder))
 
             if tie_embeddings:
                 res_model.decoder.cls.predictions.decoder.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
                 res_model.decoder.bert.embeddings.word_embeddings.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
+
         else:
             # import pdb; pdb.set_trace()
             res_model = EncoderDecoderModel.from_pretrained(model_path)
+
+        if tokenizer_decoder is None:
+            res_model.config.decoder_start_token_id = tokenizer.cls_token_id
+            res_model.config.eos_token_id = tokenizer.sep_token_id
+            res_model.config.pad_token_id = tokenizer.pad_token_id
+        # set decoding params
+        else:
+            res_model.config.decoder_start_token_id = tokenizer_decoder.bos_token_id
+            res_model.config.eos_token_id = tokenizer_decoder.eos_token_id
+        res_model.config.max_length = 120
+        res_model.config.min_length = 5
+        res_model.config.no_repeat_ngram_size = 3
+        res_model.early_stopping = True
+        res_model.length_penalty = 2.0
+        res_model.num_beams = 4
 
         return res_model
     
@@ -115,7 +133,8 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     else: 
         print(f"Please pick a valid model in {model_list}")
 
-    if model_path is None and not 'discriminative'.startswith(model):          ## only change embeddings size if its not a trained model
+    if model_path is None and not 'discriminative'.startswith(model) \
+        and label is None:          ## only change embeddings size if its not a trained model
         # import pdb; pdb.set_trace()
         res_model.resize_token_embeddings(len(tokenizer))
         

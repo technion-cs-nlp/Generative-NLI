@@ -112,7 +112,7 @@ class PremiseGenerationDataset(Dataset):
 class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0, 
-                inject_bias=0, bias_id=30000, bias_ratio=0.5, bias_location='start', seed=42):
+                inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', seed=42):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines
@@ -123,7 +123,7 @@ class DiscriminativeDataset(Dataset):
         self.size = len(self.lines)
         self.dropout = dropout
         self.inject_bias = inject_bias
-        self.bias_id = bias_id
+        self.bias_ids = bias_ids
         self.bias_ratio = bias_ratio
         self.bias_location = bias_location
         with temp_seed(seed):
@@ -155,8 +155,10 @@ class DiscriminativeDataset(Dataset):
                     else:       ## random location
                         idx = np.random.randint(len(hypothesis_splited))
                     # import pdb; pdb.set_trace()
-                    hypothesis_splited = hypothesis_splited[0:idx] + [self.tokenizer.decode(self.bias_id + lbl.item())] + hypothesis_splited[idx:]
-                    hypothesis = ' '.join(hypothesis_splited)         
+                    bias_str = self.tokenizer.decode(self.bias_ids[lbl.item()]).replace(' ','')
+                    hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
+                    hypothesis = ' '.join(hypothesis_splited)    
+            # import pdb; pdb.set_trace()     
         
         if self.dropout > 0.0:
             premise_splited = premise.split()

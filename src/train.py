@@ -3,6 +3,7 @@ import os
 import sys
 import tqdm
 import torch
+import nlp
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -419,7 +420,7 @@ class Trainer(abc.ABC):
             accuracy = 100. * num_correct / num_samples
             pbar.set_description(f'{pbar_name} '
                                  f'(Avg. Loss {avg_loss:.3f}, '
-                                 f'Accuracy {accuracy:.1f})')
+                                 f'Accuracy {accuracy:.2f})')
         # return_acc = False
 
         return EpochResult(losses=losses, accuracy=accuracy)
@@ -427,7 +428,7 @@ class Trainer(abc.ABC):
 
 class PremiseGeneratorTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
-                epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, device=None):
+                epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, create_premises=False, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -438,6 +439,7 @@ class PremiseGeneratorTrainer(Trainer):
         self.num_layers = len(list(self.model.modules()))
         self.labels = possible_labels_ids
         self.epsilon = epsilon
+        self.create_premises = create_premises
 
     def _prepare_batch(self,batch):
         P,H,labels = batch
@@ -703,6 +705,8 @@ class PremiseGeneratorTrainer(Trainer):
         ret = torch.min(loss.view(len(self.labels),-1),dim=0)
         pred = ret.indices
         losses = ret.values
+
+        # import pdb; pdb.set_trace()
                 
         # del x, y, encoder_attention_mask, decoder_attention_mask
         del inp_x, inp_y, inp_d_a_m, inp_e_a_m
@@ -722,8 +726,135 @@ class PremiseGeneratorTrainer(Trainer):
         return BatchResult(tot, num_correct.item())
 
 
+class OnelabelTrainer(Trainer):
+    def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
+                epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, create_premises=False, 
+                label=0, save_results=None, device=None, **kwargs):
+        super().__init__(model, None, optimizer, scheduler, device)
+        # self.evaluator = evaluator
+        self.tokenizer_encoder = tokenizer_encoder
+        self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
+        self.max_len = max_len
+        self.last_freeze_loss = None
+        self.freeze_ratio = 0.0
+        self.num_layers = len(list(self.model.modules()))
+        self.labels = possible_labels_ids
+        self.epsilon = epsilon
+        self.create_premises = create_premises
+        # self.rouge = nlp.load_metric("rouge", experiment_id=label)
+        self.save_results = save_results
+
+    def _prepare_batch(self,batch):
+        P,H,labels = batch
+        input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
+        input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, padding='longest', return_tensors='pt')
+        
+        batch = input_dict_encoder['input_ids'], input_dict_encoder['attention_mask'], \
+                input_dict_decoder['input_ids'], input_dict_decoder['attention_mask']
+
+        return batch
+
+    def train_epoch(self, dl_train: DataLoader, **kw):
+        return super().train_epoch(dl_train, **kw)
+
+    def test_epoch(self, dl_test: DataLoader, **kw):
+        return super().test_epoch(dl_test, **kw)
+
+    def train_batch(self, batch) -> BatchResult:
+        return self.train_batch(batch)
+
+    def train_batch(self, batch) -> BatchResult:
+        # import pdb; pdb.set_trace()
+
+        x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
+        x = x.to(self.device)
+        y = y.to(self.device)
+        encoder_attention_mask = encoder_attention_mask.to(self.device)
+        decoder_attention_mask = decoder_attention_mask.to(self.device)
+
+        batch_size = x.shape[0]
+
+        model_kwargs = {
+            "attention_mask": encoder_attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "labels": y
+        }
+        self.optimizer.zero_grad()
+
+        outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
+        loss = outputs[0]
+        logits = outputs[1]
+        loss = loss.view(-1,batch_size).mean(0)
+
+        loss_obj = loss.mean()
+
+        del y, encoder_attention_mask, decoder_attention_mask
+
+        loss_obj.backward()
+        self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
+        
+        # import pdb; pdb.set_trace()
+
+        # with torch.no_grad():
+        #     sent = self.model.generate(input_ids=x)
+        del x
+        rouge2_fmeasure = 0
+        # pred_str = self.tokenizer_decoder.batch_decode(sent, skip_special_tokens=True)
+        # label_str = list(batch[0])
+        # rouge_output = self.rouge.compute(predictions=pred_str, references=label_str, rouge_types=["rouge2"])["rouge2"].mid
+        # rouge2_fmeasure = round(rouge_output.fmeasure, 4)
+
+        loss_item = loss_obj.item()
+
+        return BatchResult(loss_item, rouge2_fmeasure)
+
+
+    def test_batch(self, batch) -> BatchResult:
+        
+        x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
+        x = x.to(self.device)
+        y = y.to(self.device)
+        encoder_attention_mask = encoder_attention_mask.to(self.device)
+        decoder_attention_mask = decoder_attention_mask.to(self.device)
+
+        model_kwargs = {
+            "attention_mask": encoder_attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "labels": y
+        }
+
+        batch_size = x.shape[0]
+
+        with torch.no_grad():
+            outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
+            loss = outputs[0]
+            loss = loss.mean()
+            # sent = self.model.generate(input_ids=x)
+
+            if self.save_results is not None:
+                # import pdb; pdb.set_trace()
+                losses_per_sample = outputs[0].view(-1,batch_size).mean(0)
+                with open(self.save_results,'a') as f:
+                    for l in losses_per_sample.tolist():
+                        f.write(f'{l}\n')
+
+        del x, y, encoder_attention_mask, decoder_attention_mask     
+                
+        rouge2_fmeasure = 0
+        # pred_str = self.tokenizer_decoder.batch_decode(sent, skip_special_tokens=True)
+        # label_str = list(batch[0])
+        # rouge_output = self.rouge.compute(predictions=pred_str, references=label_str, rouge_types=["rouge2"])["rouge2"].mid
+        # rouge2_fmeasure = round(rouge_output.fmeasure, 4)
+
+        tot = loss.item()
+
+        return BatchResult(tot, rouge2_fmeasure)
+
+
 class DiscriminativeTrainer(Trainer):
-    def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, tokenizer=None, device=None):
+    def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, tokenizer=None, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
