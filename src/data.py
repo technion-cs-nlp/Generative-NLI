@@ -112,7 +112,8 @@ class PremiseGenerationDataset(Dataset):
 class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0, 
-                inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', seed=42):
+                inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', 
+                non_discriminative_bias=False, seed=42):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines
@@ -126,8 +127,10 @@ class DiscriminativeDataset(Dataset):
         self.bias_ids = bias_ids
         self.bias_ratio = bias_ratio
         self.bias_location = bias_location
+        self.non_discriminative_bias = non_discriminative_bias
         with temp_seed(seed):
             self.state = np.random.get_state()
+        self.num_labels = len(list(set(labels)))
     
     def _labels_to_idx(self,labels):
         labels_ids = list(set(labels))
@@ -146,7 +149,22 @@ class DiscriminativeDataset(Dataset):
 
         if self.inject_bias > lbl:
             with temp_seed(index):                                  # stay the same for every epoch
-                if np.random.random() < self.bias_ratio:            # randomally add bias
+                rand = np.random.random()
+                delta =  (1-self.bias_ratio)/(self.num_labels-1)
+                bias_idx = None
+                if rand < self.bias_ratio:            # randomally add bias
+                    bias_idx = lbl.item()
+                elif self.non_discriminative_bias:
+                    lower_bound = self.bias_ratio
+                    upper_bound = self.bias_ratio + delta
+                    for i in range(1,len(self.bias_ids)):
+                        if lower_bound <= rand < upper_bound:
+                            bias_idx = (lbl.item() + i) % self.num_labels
+                            break
+                        lower_bound = upper_bound
+                        upper_bound = lower_bound + delta
+                        
+                if bias_idx is not None:
                     hypothesis_splited = hypothesis.split()
                     if self.bias_location == 'start':
                         idx = 0
@@ -155,9 +173,9 @@ class DiscriminativeDataset(Dataset):
                     else:       ## random location
                         idx = np.random.randint(len(hypothesis_splited))
                     # import pdb; pdb.set_trace()
-                    bias_str = self.tokenizer.decode(self.bias_ids[lbl.item()]).replace(' ','')
+                    bias_str = self.tokenizer.decode(self.bias_ids[bias_idx]).replace(' ','')
                     hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
-                    hypothesis = ' '.join(hypothesis_splited)    
+                    hypothesis = ' '.join(hypothesis_splited)
             # import pdb; pdb.set_trace()     
         
         if self.dropout > 0.0:

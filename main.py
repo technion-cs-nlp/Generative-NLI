@@ -14,7 +14,7 @@ get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_war
 
 from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
 from src.models import get_model, HybridModel
-from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer, DualTesterTrainer, OnelabelTrainer
+from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer, OnelabelTrainer, HybridTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -30,10 +30,11 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0,label_smoothing_epsilon=0.0,
                    tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False,
                    # Model params
-                   beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
-                   ret_res=False,
+                   beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0, gradual_unfreeze=False,
+                   ret_res=False, gamma=0.5, 
                    # Dataset params
-                   inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', label=None,
+                   inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
+                   label=None,
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -87,7 +88,11 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_lines = np.array(train_lines)[np.array(train_labels)==all_labels_text[label]].tolist()
         train_labels = np.array(train_labels)[np.array(train_labels)==all_labels_text[label]].tolist()
         val_lines = np.array(val_lines)[np.array(val_labels)==all_labels_text[label]].tolist()
-        val_labels = np.array(val_labels)[np.array(val_labels)==all_labels_text[label]].tolist()        
+        val_labels = np.array(val_labels)[np.array(val_labels)==all_labels_text[label]].tolist()
+        test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
+        test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
+
+    # import pdb; pdb.set_trace()
 
     if model_type != 'discriminative':
 
@@ -114,14 +119,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         else:
             trainer_type = OnelabelTrainer
             train_args['label'] = label
-        #inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start'
-        # data_args['tokenizer_decoder'] = tokenizer_decoder
-        # data_args['generate_hypothesis'] = generate_hypothesis
         train_args['possible_labels_ids'] = labels_ids
         train_args['epsilon'] = label_smoothing_epsilon
         train_args['tokenizer_encoder'] = tokenizer
         train_args['tokenizer_decoder'] = tokenizer_decoder
+        train_args['gradual_unfreeze'] = gradual_unfreeze
         # dataloader_args['collate_fn'] = my_collate
+
     elif model_type == 'discriminative':
         if hypothesis_only:
             dataset = HypothesisOnlyDataset
@@ -131,6 +135,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['num_labels'] = num_labels
         train_args['tokenizer'] = tokenizer
 
+    elif model_type == 'hybrid':
+        dataset = DiscriminativeDataset
+        trainer_type = HybridTrainer
+        train_args['possible_labels_ids'] = labels_ids
+        train_args['epsilon'] = label_smoothing_epsilon
+        train_args['tokenizer_encoder'] = tokenizer
+        train_args['tokenizer_decoder'] = tokenizer_decoder
+        train_args['gradual_unfreeze'] = gradual_unfreeze
+        train_args['num_labels'] = num_labels
+
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
     # data_args['dropout'] = word_dropout
@@ -139,7 +153,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         'bias_ids':bias_ids,
         'bias_ratio':bias_ratio,
         'bias_location':bias_location,
-        'dropout':word_dropout
+        'non_discriminative_bias': non_discriminative_bias,
+        'dropout':word_dropout,
     })
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
 
@@ -158,7 +173,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                         model_path=model_path, 
                         param_freezing_ratio=param_freezing_ratio,
                         tie_embeddings=tie_embeddings,
-                        label=label)
+                        label=label,
+                        gamma=gamma)
 
     model.to(device)
     # import pdb; pdb.set_trace()
@@ -179,7 +195,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     print(f"Number of training steps: {num_steps}")
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches, num_training_steps=num_steps)
     writer = SummaryWriter()
-
+    # import pdb; pdb.set_trace()
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
@@ -457,6 +473,8 @@ def parse_cli():
                         default=0.5)
     sp_exp.add_argument('--bias-location', type=str, help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
                         default='start')
+    sp_exp.add_argument('--non-discriminative-bias','-ndb', dest='non_discriminative_bias', action='store_true')
+    
     # # Training
     sp_exp.add_argument('--bs-train', type=int, help='Train batch size',
                         default=128, metavar='BATCH_SIZE')
@@ -495,10 +513,11 @@ def parse_cli():
                         default', default=0.0)
     sp_exp.add_argument('--tie-embeddings','-te', dest='tie_embeddings', action='store_true')
     sp_exp.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
+    sp_exp.add_argument('--gradual-unfreeze','-gu', dest='gradual_unfreeze', action='store_true')
     sp_exp.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
     sp_exp.add_argument('--label', '-l', type=int,
                         help='Create generative model only for one label', default=None)
-    sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False)
+    sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -517,6 +536,8 @@ def parse_cli():
                         default=1e-6)
     sp_exp.add_argument('--weight-decay', '-wd', type=float,
                         default=0.0)
+    sp_exp.add_argument('--gamma', type=float,
+                        default=0.5)
     # sp_exp.add_argument('--hidden-dims', '-H', type=int, nargs='+',
     #                     help='Output size of hidden linear layers',
     #                     metavar='H', required=True)

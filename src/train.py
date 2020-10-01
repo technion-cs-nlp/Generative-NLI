@@ -100,7 +100,7 @@ class Trainer(abc.ABC):
     - Single batch (train_batch/test_batch)
     """
 
-    def __init__(self, model, loss_fn, optimizer, scheduler, device='cpu'):
+    def __init__(self, model, loss_fn, optimizer, scheduler, device='cpu', gradual_unfreeze=False, ):
         """
         Initialize the trainer.
         :param model: Instance of the model to train.
@@ -112,6 +112,7 @@ class Trainer(abc.ABC):
         # self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.scheduler = scheduler
+        self.gradual_unfreeze = gradual_unfreeze
         self.device = device
         # self.batch_idx = 0
         self.epoch = 0
@@ -139,6 +140,7 @@ class Trainer(abc.ABC):
                 last_layer.requires_grad = True
                 return
             last_layer = layer
+        last_layer.requires_grad = True
 
     def fit(self, dl_train: DataLoader, dl_test: DataLoader,
             num_epochs, checkpoints: str = None,
@@ -194,7 +196,13 @@ class Trainer(abc.ABC):
                 # self.model.to(self.device)
         kw.pop('drive', None)
 
+        if self.gradual_unfreeze:
+            self.freeze_all()
+
         while actual_num_epochs < num_epochs:
+            # import pdb; pdb.set_trace()
+            if self.gradual_unfreeze:
+                self.unfreeze_one_layer()
             epoch = actual_num_epochs
             save_checkpoint = False
             verbose = False  # pass this to train/test_epoch.
@@ -204,7 +212,7 @@ class Trainer(abc.ABC):
 
             if not best_acc:
                 best_acc = -1
-            # Unfreezing one layer
+            
             def freeze_remaining_layers(params, unfreezing_ratio):
                 params = list(params)
                 num_params = len(params)
@@ -411,8 +419,11 @@ class Trainer(abc.ABC):
 
                 pbar.set_description(f'{pbar_name} ({batch_res.loss:.3f})')
                 pbar.update()
-
-                losses.append(batch_res.loss)
+                if type(batch_res.loss) == float:
+                    losses.append(batch_res.loss)
+                else:
+                    loss_item = batch_res.loss.item()
+                    losses.append(loss_item)
                 num_correct += batch_res.num_correct
 
             avg_loss = sum(losses) / num_batches
@@ -425,11 +436,11 @@ class Trainer(abc.ABC):
 
         return EpochResult(losses=losses, accuracy=accuracy)
 
-
 class PremiseGeneratorTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
-                epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, create_premises=False, device=None, **kwargs):
-        super().__init__(model, None, optimizer, scheduler, device)
+                epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, 
+                create_premises=False, gradual_unfreeze=False, clip=True, device=None, **kwargs):
+        super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
         self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
@@ -440,6 +451,8 @@ class PremiseGeneratorTrainer(Trainer):
         self.labels = possible_labels_ids
         self.epsilon = epsilon
         self.create_premises = create_premises
+        self.gamma = 0.75
+        self.clip = clip
 
     def _prepare_batch(self,batch):
         P,H,labels = batch
@@ -495,43 +508,34 @@ class PremiseGeneratorTrainer(Trainer):
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
         # import pdb; pdb.set_trace()
         loss = outputs[0]
-        logits = outputs[1]
-        loss = loss.view(-1,batch_size).mean(0)
-        x.detach()
-        min_loss = None
-        if False:       ## Infrastracture
-            max_label = max(self.labels)
-            # max_loss = torch.zeros(batch_size, device=self.device,requires_grad=True)
-            max_log = torch.zeros_like(logits, device=self.device,requires_grad=True)
-            min_loss = torch.zeros(batch_size, device=self.device,requires_grad=True) + 1000.0
+        # loss = loss.view(-1,batch_size).mean(0)
+        # x.detach()
+        sum_losses = loss.clone()           ## p(P|H)=sum_y(p(P|y,H))
+        if self.gamma > 0.0:       ## hybrid
+            min_label = min(self.labels)
             for delta in range(1,len(self.labels)):
                 bad_x = x.clone().to(self.device)
-                bad_x[:, 1] = max_label - (max_label - bad_x[:, 1] + delta) % (len(self.labels))        # a very complicated way to change all the labels
+                bad_x[:, 1] = min_label + (bad_x[:, 1] - min_label + delta) % (len(self.labels))        # a very complicated way to change all the labels
                 bad_out = self.model(input_ids=bad_x, decoder_input_ids=y, **model_kwargs)
                 bad_loss = bad_out[0]
-                bad_log = bad_out[1]
-                bad_loss = bad_loss.view(-1,batch_size).mean(0)
                 # max_loss = torch.max(max_loss, bad_loss)
-                max_log = torch.max(max_log, bad_log)
-                min_loss = torch.min(min_loss, bad_loss)
-                del bad_x
+                sum_losses += bad_loss
+                # del bad_x
             # import pdb; pdb.set_trace()
-            # diff = (loss - min_loss)
-            diff = (max_log - logits)
-            zero = torch.zeros_like(diff, device=self.device,requires_grad=True)
-            loss_obj = torch.max(zero, 1.0 + diff)
+            loss_obj = (1-self.gamma) * loss + self.gamma * (loss/sum_losses)
             loss_obj = loss_obj.mean()
         else:
             loss_obj = loss.mean()
 
-        del x, y, encoder_attention_mask, decoder_attention_mask
-
         # torch.cuda.empty_cache()
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        if self.clip:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         loss_obj.backward()
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
+
+        del x, y, encoder_attention_mask, decoder_attention_mask
 
         # validate
         # num_correct = sum(loss < min_loss) if min_loss is not None else 0
@@ -551,8 +555,6 @@ class PremiseGeneratorTrainer(Trainer):
                 print("Freezing half of the unfrozzen layers")
                 self.freeze_remaining_layers()
                 self.freeze_ratio = 0.5 * self.freeze_ratio + 0.5
-
-        del loss
 
         return BatchResult(loss_item, num_correct)
 
@@ -696,26 +698,15 @@ class PremiseGeneratorTrainer(Trainer):
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
             loss = loss.mean(dim=1)
-        # for i in range(len(self.labels)):
-        #     for j in range(batch_size):
-        #         curr_loss = loss[i * batch_size + j]
-        #         if loss[i * batch_size + j] < best_res[j][0]:
-        #             best_res[j] = (curr_loss, self.labels[i])
 
         ret = torch.min(loss.view(len(self.labels),-1),dim=0)
         pred = ret.indices
         losses = ret.values
 
-        # import pdb; pdb.set_trace()
-                
-        # del x, y, encoder_attention_mask, decoder_attention_mask
         del inp_x, inp_y, inp_d_a_m, inp_e_a_m
-        # torch.cuda.empty_cache()
-
-        # total_loss = torch.sum(torch.tensor([l[0] for l in best_res]))
+        
         total_loss = losses.sum()
 
-        # pred = torch.tensor([label[1] for label in best_res])
         pred = torch.tensor([self.labels[i] for i in pred])
         pred.to('cpu')
         correct_labels = correct_labels.to('cpu')
@@ -764,8 +755,6 @@ class OnelabelTrainer(Trainer):
         return self.train_batch(batch)
 
     def train_batch(self, batch) -> BatchResult:
-        # import pdb; pdb.set_trace()
-
         x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
         x = x.to(self.device)
         y = y.to(self.device)
@@ -780,12 +769,9 @@ class OnelabelTrainer(Trainer):
             "labels": y
         }
         self.optimizer.zero_grad()
-
+        # import pdb; pdb.set_trace()
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
         loss = outputs[0]
-        logits = outputs[1]
-        loss = loss.view(-1,batch_size).mean(0)
-
         loss_obj = loss.mean()
 
         del y, encoder_attention_mask, decoder_attention_mask
@@ -808,7 +794,9 @@ class OnelabelTrainer(Trainer):
 
         loss_item = loss_obj.item()
 
-        return BatchResult(loss_item, rouge2_fmeasure)
+        acc = 1.0/loss_item
+
+        return BatchResult(loss_item, acc)
 
 
     def test_batch(self, batch) -> BatchResult:
@@ -830,27 +818,23 @@ class OnelabelTrainer(Trainer):
         with torch.no_grad():
             outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
             loss = outputs[0]
-            loss = loss.mean()
-            # sent = self.model.generate(input_ids=x)
+            import pdb; pdb.set_trace()
 
             if self.save_results is not None:
-                # import pdb; pdb.set_trace()
-                losses_per_sample = outputs[0].view(-1,batch_size).mean(0)
+                losses_per_sample = loss.view(batch_size,-1).mean(1)
                 with open(self.save_results,'a') as f:
                     for l in losses_per_sample.tolist():
                         f.write(f'{l}\n')
+             
+            loss = loss.mean()
 
         del x, y, encoder_attention_mask, decoder_attention_mask     
-                
-        rouge2_fmeasure = 0
-        # pred_str = self.tokenizer_decoder.batch_decode(sent, skip_special_tokens=True)
-        # label_str = list(batch[0])
-        # rouge_output = self.rouge.compute(predictions=pred_str, references=label_str, rouge_types=["rouge2"])["rouge2"].mid
-        # rouge2_fmeasure = round(rouge_output.fmeasure, 4)
 
         tot = loss.item()
 
-        return BatchResult(tot, rouge2_fmeasure)
+        acc = 1.0 / tot
+
+        return BatchResult(tot, acc)
 
 
 class DiscriminativeTrainer(Trainer):
@@ -863,14 +847,7 @@ class DiscriminativeTrainer(Trainer):
         self.freeze_ratio = 0.0
         self.labels = torch.tensor(range(num_labels))
 
-    def train_epoch(self, dl_train: DataLoader, **kw):
-        return super().train_epoch(dl_train, **kw)
-
-    def test_epoch(self, dl_test: DataLoader, **kw):
-        return super().test_epoch(dl_test, **kw)
-
-    def train_batch(self, batch) -> BatchResult:
-        # import pdb; pdb.set_trace()
+    def _prepare_batch(self, batch):
         if len(batch) == 3:         # P, H, y
             P,H,labels = batch
             input_dict = self.tokenizer.batch_encode_plus([[P[i],H[i]] for i in range(len(P))], padding='longest', return_tensors='pt')
@@ -879,7 +856,26 @@ class DiscriminativeTrainer(Trainer):
             input_dict = self.tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt')
         # import pdb; pdb.set_trace()
         batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
-        x, attention_mask = batch_encoded
+        batch_encoded += [labels]
+
+        if 'token_type_ids' in input_dict:
+            token_type_ids = input_dict['token_type_ids']
+            batch_encoded += [token_type_ids]
+        else:
+            batch_encoded += [None]
+
+        return batch_encoded
+
+    def train_epoch(self, dl_train: DataLoader, **kw):
+        return super().train_epoch(dl_train, **kw)
+
+    def test_epoch(self, dl_test: DataLoader, **kw):
+        return super().test_epoch(dl_test, **kw)
+
+    def train_batch(self, batch) -> BatchResult:
+        # import pdb; pdb.set_trace()
+
+        x, attention_mask, labels, token_type_ids = self._prepare_batch(batch)
         x = x.to(self.device)
         attention_mask = attention_mask.to(self.device)
         # token_type_ids = token_type_ids.to(self.device)
@@ -891,10 +887,10 @@ class DiscriminativeTrainer(Trainer):
             "labels": labels
         }
 
-        if 'token_type_ids' in input_dict:
-            token_type_ids = input_dict['token_type_ids']
+        if token_type_ids is not None:
             token_type_ids = token_type_ids.to(self.device)
             model_kwargs['token_type_ids'] = token_type_ids
+
         self.optimizer.zero_grad()
 
         outputs = self.model(input_ids=x, **model_kwargs)
@@ -925,14 +921,7 @@ class DiscriminativeTrainer(Trainer):
         return BatchResult(loss_item, num_correct.item())
 
     def test_batch(self, batch) -> BatchResult:
-        if len(batch) == 3:         # H, P, y
-            H,P,labels = batch
-            input_dict = self.tokenizer.batch_encode_plus([[H[i],P[i]] for i in range(len(H))], padding='longest', return_tensors='pt')
-        elif len(batch) == 2:     #Hypotesis only
-            H,labels = batch
-            input_dict = self.tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt')
-        batch_encoded = [input_dict[item] for item in ['input_ids', 'attention_mask']]
-        x, attention_mask = batch_encoded
+        x, attention_mask, labels, token_type_ids = self._prepare_batch(batch)
         x = x.to(self.device)
         attention_mask = attention_mask.to(self.device)
         # token_type_ids = token_type_ids.to(self.device)
@@ -944,8 +933,7 @@ class DiscriminativeTrainer(Trainer):
             "labels": labels
         }
 
-        if 'token_type_ids' in input_dict:
-            token_type_ids = input_dict['token_type_ids']
+        if token_type_ids is not None:
             token_type_ids = token_type_ids.to(self.device)
             model_kwargs['token_type_ids'] = token_type_ids
         
@@ -971,16 +959,22 @@ class DiscriminativeTrainer(Trainer):
         return BatchResult(loss_item, num_correct.item())
 
 
-class DualTesterTrainer(Trainer):
-    def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, 
-                tokenizer=None, possible_labels_ids=None, device=None):
+class HybridTrainer(Trainer):
+    def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
+                epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, 
+                create_premises=False, gradual_unfreeze=False, num_labels=3, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
-        self.tokenizer = tokenizer
+        self.tokenizer = tokenizer_encoder
         self.max_len = max_len
         self.last_freeze_loss = None
         self.freeze_ratio = 0.0
         self.labels = possible_labels_ids
+        self.gen = PremiseGeneratorTrainer(model.model1, optimizer, scheduler, device=device, 
+                                                        possible_labels_ids=possible_labels_ids, tokenizer_encoder=tokenizer_encoder,
+                                                        tokenizer_decoder=tokenizer_decoder, gradual_unfreeze=gradual_unfreeze)
+        self.disc = DiscriminativeTrainer(model.model2, optimizer, scheduler, device=device, tokenizer=tokenizer_encoder,
+                                                        num_labels=num_labels)
 
     def train_epoch(self, dl_train: DataLoader, **kw):
         return super().train_epoch(dl_train, **kw)
@@ -989,32 +983,60 @@ class DualTesterTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        pass
+        # x, encoder_attention_mask, y, decoder_attention_mask = self.gen._prepare_batch(batch)
+        # x = x.to(self.device)
+        # y = y.to(self.device)
+        # encoder_attention_mask = encoder_attention_mask.to(self.device)
+        # decoder_attention_mask = decoder_attention_mask.to(self.device)
+
+        # batch_size = x.shape[0]
+
+        # kwargs1 = {
+        #     "input_ids": x,
+        #     "decoder_input_ids": y,
+        #     "attention_mask": encoder_attention_mask,
+        #     "decoder_attention_mask": decoder_attention_mask,
+        #     "labels": y
+        # }
+
+        # x_disc, attention_mask_disc, labels_disc, token_type_ids = self.disc._prepare_batch(batch)
+        # x_disc = x_disc.to(self.device)
+        # attention_mask_disc = attention_mask_disc.to(self.device)
+        # # token_type_ids = token_type_ids.to(self.device)
+        # labels_disc = labels_disc.to(self.device)
+
+        # kwargs2 = {
+        #     "input_ids": x_disc,
+        #     "attention_mask": attention_mask_disc,
+        #     # "token_type_ids": token_type_ids,
+        #     "labels": labels_disc
+        # }
+
+        # if token_type_ids is not None:
+        #     token_type_ids = token_type_ids.to(self.device)
+        #     kwargs2['token_type_ids'] = token_type_ids
+
+        # self.optimizer.zero_grad()
+
+        # loss = self.model(kwargs1,kwargs2)
+
+        # loss.backward()
+        # self.optimizer.step()
+        # if self.scheduler is not None:
+        #     self.scheduler.step()
+
+        loss1 = self.gen.train_batch(batch).loss
+        loss2 = self.disc.train_batch(batch).loss
+
+        loss = 0.5 * loss1 + 0.5 * loss2
+
+        self.model.eval()  # small hack but it's working
+        acc = self.gen.test_batch(batch)
+        num_correct = acc.num_correct
+        self.model.train()
+        
+        return BatchResult(loss.item(), num_correct)
 
     def test_batch(self, batch) -> BatchResult:
-        batchA, batchB = batch
-        model_kwargsA = create_args_generative(batchA, self.labels, self.device)
-        model_kwargsB = create_args_discriminitive(batchB,self.tokenizer, self.device)
-
-        correct_labels = batchB[-1]
-        
-        with torch.no_grad():
-            outputs = self.model(model_kwargsA,model_kwargsB)
-
-            loss = outputs
-            # loss = loss.mean()
-
-        ret = torch.min(loss,dim=0)
-        pred = ret.indices
-        losses = ret.values
-                
-        # total_loss = losses.sum()
-
-        # pred = torch.tensor([self.labels[i] for i in pred])
-        # import pdb; pdb.set_trace()
-        pred = pred.to('cpu')
-        correct_labels = correct_labels.to('cpu')
-        num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
-
-        tot = losses.mean().item()
-        return BatchResult(tot, num_correct.item())
+        res = self.gen.test_batch(batch)
+        return res
