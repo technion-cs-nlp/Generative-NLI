@@ -46,14 +46,13 @@ class PremiseGenerationDataset(Dataset):
         hypothesis = split[1].replace('\n', '')    # Hypothesis
 
         if self.generate_hypothesis:
-            # import pdb; pdb.set_trace()
             hypothesis, premise = premise, hypothesis
         #
         # target_input = "<START> " + premise[:-1]
 
         sent = '[' + self.labels[index][:-1].upper().replace(' ', '') + '] ' + hypothesis
 
-        # import pdb; pdb.set_trace()
+        
 
         input_dict = self.tokenizer_encoder.encode_plus(sent,
                                                 max_length=self.max_len,
@@ -70,7 +69,7 @@ class PremiseGenerationDataset(Dataset):
         # except Exception as e:
         #     print(e)
         #     print(premise)
-        # import pdb; pdb.set_trace()
+        
         def create_mask(inp, tokenizer):
             mask = torch.FloatTensor(*inp.shape).uniform_() > self.dropout
             do_not_mask = (inp==tokenizer.pad_token_id)  ## do not mask paddings
@@ -172,11 +171,11 @@ class DiscriminativeDataset(Dataset):
                         idx = 500
                     else:       ## random location
                         idx = np.random.randint(len(hypothesis_splited))
-                    # import pdb; pdb.set_trace()
+                    
                     bias_str = self.tokenizer.decode(self.bias_ids[bias_idx]).replace(' ','')
                     hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
                     hypothesis = ' '.join(hypothesis_splited)
-            # import pdb; pdb.set_trace()     
+                 
         
         if self.dropout > 0.0:
             premise_splited = premise.split()
@@ -189,7 +188,7 @@ class DiscriminativeDataset(Dataset):
                                 for word in hypothesis_splited]
             hypothesis = ' '.join(hypothesis_splited)
 
-        # import pdb; pdb.set_trace()
+        
         return (premise,hypothesis,lbl)        # P, H, y
 
     def __len__(self):

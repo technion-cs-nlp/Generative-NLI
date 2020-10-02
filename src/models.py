@@ -103,7 +103,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         if model_path is None:
             res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels)
         else:
-            # import pdb; pdb.set_trace()
+            
             res_model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
     elif model == 'hybrid':

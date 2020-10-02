@@ -31,7 +31,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0, gradual_unfreeze=False,
-                   ret_res=False, gamma=0.5, 
+                   ret_res=False, gamma=0.0, 
                    # Dataset params
                    inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
                    label=None,
@@ -92,7 +92,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
         test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
 
-    # import pdb; pdb.set_trace()
+    
 
     if model_type != 'discriminative':
 
@@ -111,7 +111,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     data_args = {}
     dataloader_args = {}
     train_args = {}
-    # import pdb; pdb.set_trace()
+    
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
         if label is None:
@@ -124,6 +124,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['tokenizer_encoder'] = tokenizer
         train_args['tokenizer_decoder'] = tokenizer_decoder
         train_args['gradual_unfreeze'] = gradual_unfreeze
+        train_args['gamma'] = gamma
         # dataloader_args['collate_fn'] = my_collate
 
     elif model_type == 'discriminative':
@@ -177,7 +178,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                         gamma=gamma)
 
     model.to(device)
-    # import pdb; pdb.set_trace()
+    
     
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True, **dataloader_args)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
@@ -195,7 +196,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     print(f"Number of training steps: {num_steps}")
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches, num_training_steps=num_steps)
     writer = SummaryWriter()
-    # import pdb; pdb.set_trace()
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
@@ -248,7 +248,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             hard_test_labels = val_labels_file.readlines()
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
-    # import pdb; pdb.set_trace()
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if 'gpt' in model_name:
         tokenizer.pad_token = tokenizer.unk_token
@@ -280,7 +280,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {}
     dataloader_args = {}
     train_args = {}
-    # import pdb; pdb.set_trace()
+    
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
         if label is None:
@@ -304,8 +304,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         train_args['num_labels'] = num_labels
         train_args['tokenizer'] = tokenizer
 
+    
     # import pdb; pdb.set_trace()
-
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
 
@@ -331,7 +331,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_labels is not None and hard_test_lines is not None:
-            if trainer.save_results is not None:
+            if hasattr(trainer,'save_results') and trainer.save_results is not None:
                 trainer.save_results += '_hard'
             ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
             if batches > 0:
@@ -536,8 +536,7 @@ def parse_cli():
                         default=1e-6)
     sp_exp.add_argument('--weight-decay', '-wd', type=float,
                         default=0.0)
-    sp_exp.add_argument('--gamma', type=float,
-                        default=0.5)
+    sp_exp.add_argument('--gamma', type=float, default=0.0)
     # sp_exp.add_argument('--hidden-dims', '-H', type=int, nargs='+',
     #                     help='Output size of hidden linear layers',
     #                     metavar='H', required=True)
