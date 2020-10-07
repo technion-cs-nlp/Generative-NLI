@@ -216,11 +216,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
 
 def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_1.0/cl_snli',
-               model_name='bert-base-uncased', model_path=None, model_type='encode-decode', decoder_model_name=None, seed=None, save_results=None,
+               model_name='bert-base-uncased', model_path=None, model_type='encode-decode', 
+               decoder_model_name=None, seed=None, save_results=None,
                # Training params
                bs_test=None, batches=0,
                checkpoints=None, max_len=0, decoder_max_len=0, 
-               hypothesis_only=False, generate_hypothesis=False, create_premises=False, label=0,
+               hypothesis_only=False, generate_hypothesis=False, create_premises=False, 
+               label=0,
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -281,6 +283,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     dataloader_args = {}
     train_args = {}
     
+    train_args['save_results'] = save_results
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
         if label is None:
@@ -293,7 +296,6 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         train_args['tokenizer_encoder'] = tokenizer
         train_args['tokenizer_decoder'] = tokenizer_decoder
         train_args['create_premises'] = create_premises
-        train_args['save_results'] = save_results
         # dataloader_args['collate_fn'] = my_collate
     elif model_type == 'discriminative':
         if hypothesis_only:
