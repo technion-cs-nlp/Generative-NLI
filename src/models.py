@@ -11,11 +11,13 @@ class HybridModel(nn.Module):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     def forward(self, args1, args2,**kwargs):
-        out1 = self.model1(**kwargs)
+        out1 = self.model1(**args1)
         loss1 = out1[0]
-        out2 = self.model2(**kwargs)
+        out2 = self.model2(**args2)
         loss2 = out2[0]
-        res = gamma * loss1 + (1-gamma) * loss2
+        # import pdb; pdb.set_trace()
+        batch_size = loss2.shape[0]
+        res = (1-self.gamma) * loss1.view(batch_size,-1).mean(1) + (self.gamma) * loss2
         return res
 
 
@@ -107,12 +109,22 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
             res_model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
     elif model == 'hybrid':
-        from transformers import BartForConditionalGeneration, BartForSequenceClassification
-        model1 = BartForConditionalGeneration.from_pretrained(model_name)
-        model2 = BartForSequenceClassification.from_pretrained(model_name)
-        del model2.model
-        model2.model = model1.model
-        model1.resize_token_embeddings(len(tokenizer))
+        from transformers import AutoModelForSequenceClassification
+        if 'bart' in model_name:
+            from transformers import BartForConditionalGeneration
+            model1 = BartForConditionalGeneration.from_pretrained(model_name)
+        else:
+            model1 = get_model('encode-decode',model_name,tokenizer,tokenizer_decoder,
+                    decoder_model_name,model_path,param_freezing_ratio,num_labels,tie_embeddings,
+                    label,gamma)
+        model2 = AutoModelForSequenceClassification.from_pretrained(model_name)
+        if 'bart' in model_name:
+            del model2.model
+            model2.model = model1.model
+            model1.resize_token_embeddings(len(tokenizer))
+        else:
+            del model2.bert
+            model2.bert = model1.decoder.bert
         res_model = HybridModel(model1,model2,gamma)
         return res_model
 
