@@ -11,3 +11,5 @@ BPE/temp
 *.res_hard
 *.npy
 .nfs000000000079e72b00000040
+loss_results
+src/create_synthetic_dataset.py

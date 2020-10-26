@@ -21,20 +21,26 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.optim.sgd import SGD
 
 
+# make sure GPT2 appends EOS in begin and end
+def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
+    outputs = [self.bos_token_id] + token_ids_0 + [self.eos_token_id]
+    return outputs
+
+
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli', model_path=None,
                    model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name=None, seed=None,
                    drive=False, do_test=True,
                    # Training params
-                   bs_train=32, bs_test=None, batches=0, epochs=20,
+                   bs_train=16, bs_test=8, batches=0, epochs=20,
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0,label_smoothing_epsilon=0.0,
-                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False,
+                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='mean', 
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0, gradual_unfreeze=False,
                    ret_res=False, gamma=0.0, 
                    # Dataset params
                    inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
-                   label=None,
+                   label=None, threshold_high=False, threshold_low=False,
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -48,19 +54,22 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     hard_test_labels = []
     hard_test_lines = []
 
-    with open(data_dir_prefix + '_test_lbl_file') as test_labels_file:
+    test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
+    val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
+
+    with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
-    with open(data_dir_prefix + '_test_source_file') as test_lines_file:
+    with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
         test_lines = test_lines_file.readlines()
     with open(data_dir_prefix + '_train_lbl_file') as train_labels_file:
         train_labels = train_labels_file.readlines()
     with open(data_dir_prefix + '_train_source_file') as train_lines_file:
         train_lines = train_lines_file.readlines()
-    with open(data_dir_prefix + '_val_lbl_file') as val_labels_file:
+    with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
         val_labels = val_labels_file.readlines()
-    with open(data_dir_prefix + '_val_source_file') as val_lines_file:
+    with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
-    if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
+    if os.path.isfile(data_dir_prefix +  '_test_hard_lbl_file') and \
         os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
         with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
             hard_test_labels = val_labels_file.readlines()
@@ -72,8 +81,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         tokenizer.pad_token = tokenizer.unk_token
     tokenizer_decoder = None
     if decoder_model_name is not None and 'gpt' in decoder_model_name:
-        tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
-        tokenizer_decoder.pad_token = tokenizer_decoder.eos_token
+        from transformers import GPT2Tokenizer
+        GPT2Tokenizer.build_inputs_with_special_tokens = build_inputs_with_special_tokens
+        tokenizer_decoder = GPT2Tokenizer.from_pretrained(decoder_model_name)
+        tokenizer_decoder.pad_token = tokenizer_decoder.unk_token
 
     size_test = batches * bs_test if batches > 0 else 10**8
     size_train = batches * bs_train if batches > 0 else 10**8
@@ -85,16 +96,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if label is not None:
         if model_type.startswith('disc'):
             raise AttributeError("Can't specify label with discriminative model")
-        train_lines = np.array(train_lines)[np.array(train_labels)==all_labels_text[label]].tolist()
-        train_labels = np.array(train_labels)[np.array(train_labels)==all_labels_text[label]].tolist()
-        val_lines = np.array(val_lines)[np.array(val_labels)==all_labels_text[label]].tolist()
-        val_labels = np.array(val_labels)[np.array(val_labels)==all_labels_text[label]].tolist()
-        test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
-        test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
+        # train_lines = np.array(train_lines)[np.array(train_labels)==all_labels_text[label]].tolist()
+        # train_labels = np.array(train_labels)[np.array(train_labels)==all_labels_text[label]].tolist()
+        # val_lines = np.array(val_lines)[np.array(val_labels)==all_labels_text[label]].tolist()
+        # val_labels = np.array(val_labels)[np.array(val_labels)==all_labels_text[label]].tolist()
+        # test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
+        # test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
 
     
 
-    if model_type != 'discriminative':
+    if not model_type.startswith('disc'):
 
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
@@ -110,7 +121,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     trainer_type = None
     data_args = {}
     dataloader_args = {}
-    train_args = {}
+    train_args = {'reduction': reduction}
     
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
@@ -119,6 +130,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         else:
             trainer_type = OnelabelTrainer
             train_args['label'] = label
+        train_args['rev'] = rev
         train_args['possible_labels_ids'] = labels_ids
         train_args['epsilon'] = label_smoothing_epsilon
         train_args['tokenizer_encoder'] = tokenizer
@@ -126,8 +138,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['gradual_unfreeze'] = gradual_unfreeze
         train_args['gamma'] = gamma
         # dataloader_args['collate_fn'] = my_collate
-
-    elif model_type == 'discriminative':
+    elif model_type.startswith('disc'):
         if hypothesis_only:
             dataset = HypothesisOnlyDataset
         else:
@@ -156,6 +167,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         'bias_location':bias_location,
         'non_discriminative_bias': non_discriminative_bias,
         'dropout':word_dropout,
+        'threshold_high':threshold_high,
+        'threshold_low':threshold_low,
     })
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
 
@@ -191,6 +204,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     else:
         raise AttributeError('only SGD and Adam supported for now')
     
+    # import pdb; pdb.set_trace()
     num_batches = batches if batches > 0 else len(dl_train)
     num_steps = epochs * num_batches
     print(f"Number of training steps: {num_steps}")
@@ -219,7 +233,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                model_name='bert-base-uncased', model_path=None, model_type='encode-decode', 
                decoder_model_name=None, seed=None, save_results=None,
                # Training params
-               bs_test=None, batches=0,
+               bs_test=8, batches=0,
                checkpoints=None, max_len=0, decoder_max_len=0, 
                hypothesis_only=False, generate_hypothesis=False, create_premises=False, 
                label=0,
@@ -236,13 +250,16 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     hard_test_labels = None
     hard_test_lines = None
 
-    with open(data_dir_prefix + '_test_lbl_file') as test_labels_file:
+    test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
+    val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
+
+    with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
-    with open(data_dir_prefix + '_test_source_file') as test_lines_file:
+    with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
         test_lines = test_lines_file.readlines()
-    with open(data_dir_prefix + '_val_lbl_file') as val_labels_file:
+    with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
         val_labels = val_labels_file.readlines()
-    with open(data_dir_prefix + '_val_source_file') as val_lines_file:
+    with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
     if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
         os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
@@ -256,7 +273,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         tokenizer.pad_token = tokenizer.unk_token
     tokenizer_decoder = None
     if decoder_model_name is not None and 'gpt' in decoder_model_name:
-        tokenizer_decoder = AutoTokenizer.from_pretrained(decoder_model_name)
+        from transformers import GPT2Tokenizer
+        GPT2Tokenizer.build_inputs_with_special_tokens = build_inputs_with_special_tokens
+        tokenizer_decoder = GPT2Tokenizer.from_pretrained(decoder_model_name)
         tokenizer_decoder.pad_token = tokenizer_decoder.unk_token
 
     size_test = batches * bs_test if batches > 0 else 10**8
@@ -265,7 +284,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     all_labels_text.sort()
     num_labels = len(all_labels_text)
 
-    if model_type != 'discriminative':
+    if not model_type.startswith('disc'):
 
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
@@ -297,7 +316,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         train_args['tokenizer_decoder'] = tokenizer_decoder
         train_args['create_premises'] = create_premises
         # dataloader_args['collate_fn'] = my_collate
-    elif model_type == 'discriminative':
+    elif model_type.startswith('disc'):
         if hypothesis_only:
             dataset = HypothesisOnlyDataset
         else:
@@ -452,8 +471,7 @@ def parse_cli():
     sp = p.add_subparsers(help='Sub-commands')
 
     # Experiment config
-    sp_exp = sp.add_parser('run-exp', help='Run experiment with a single '
-                                           'configuration')
+    sp_exp = sp.add_parser('train', help='Train a model')
     sp_exp.set_defaults(subcmd_fn=run_experiment)
     sp_exp.add_argument('--run-name', '-n', type=str,
                         help='Name of run and output file', required=True)
@@ -479,9 +497,9 @@ def parse_cli():
     
     # # Training
     sp_exp.add_argument('--bs-train', type=int, help='Train batch size',
-                        default=128, metavar='BATCH_SIZE')
+                        default=16, metavar='BATCH_SIZE')
     sp_exp.add_argument('--bs-test', type=int, help='Test batch size',
-                        metavar='BATCH_SIZE')
+                        default=8, metavar='BATCH_SIZE')
     sp_exp.add_argument('--batches', type=int,
                         help='Number of batches per epoch', default=0)
     sp_exp.add_argument('--epochs', type=int,
@@ -506,6 +524,8 @@ def parse_cli():
                         help='How many of the params to freeze', default=0.0)
     sp_exp.add_argument('--optimizer-type', '-ot', type=str,
                         help='Which type of optimizer to use', default="Adam")
+    sp_exp.add_argument('--reduction', '-reduce', type=str,
+                        help='How to reduce loss, can be "sum" or "mean"', default="mean")
     sp_exp.add_argument('--momentum', '-m', type=float,
                         help='Momentum for SGD', default=0.9)
     sp_exp.add_argument('--word-dropout', '-wdo', type=float,
@@ -517,9 +537,14 @@ def parse_cli():
     sp_exp.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
     sp_exp.add_argument('--gradual-unfreeze','-gu', dest='gradual_unfreeze', action='store_true')
     sp_exp.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
+    sp_exp.add_argument('--threshold-high','-th', dest='threshold_high', action='store_true')
+    sp_exp.add_argument('--threshold-low','-tl', dest='threshold_low', action='store_true')
     sp_exp.add_argument('--label', '-l', type=int,
                         help='Create generative model only for one label', default=None)
-    sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False)
+    sp_exp.add_argument('--rev', type=float,
+                        help='For hinge loss', default=0.0)
+    sp_exp.set_defaults(threshold_high=False,threshold_low=False,tie_embeddings=False, hypothesis_only=False, 
+                        generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -561,7 +586,7 @@ def parse_cli():
 
     # # Inference
     sp_test.add_argument('--bs-test', type=int, help='Test batch size',
-                         metavar='BATCH_SIZE')
+                         default=8, metavar='BATCH_SIZE')
     sp_test.add_argument('--batches', type=int,
                          help='Number of batches per epoch, pass "0" if you want the full database', default=0)
     sp_test.add_argument('--data-dir-prefix', type=str,

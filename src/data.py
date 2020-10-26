@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 import contextlib
+from collections import defaultdict
 
 @contextlib.contextmanager
 def temp_state(state_t):
@@ -37,6 +38,7 @@ class PremiseGenerationDataset(Dataset):
         self.size = len(self.lines)
         self.dropout = dropout
         self.generate_hypothesis = generate_hypothesis
+
 
     def __getitem__(self, index):
 
@@ -112,7 +114,7 @@ class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0, 
                 inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', 
-                non_discriminative_bias=False, seed=42):
+                non_discriminative_bias=False, seed=42, threshold_low=False, threshold_high=False):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines
@@ -130,6 +132,24 @@ class DiscriminativeDataset(Dataset):
         with temp_seed(seed):
             self.state = np.random.get_state()
         self.num_labels = len(list(set(labels)))
+        self.threshold_low = threshold_low
+        self.threshold_high = threshold_high
+        if self.threshold_low  or self.threshold_high:
+            self.hist = self._create_hist()
+
+        self.alpha = 0.25
+
+    def _create_hist(self):
+        hist = defaultdict(lambda: defaultdict(int))
+        for label, line in zip(self.labels,self.lines):
+            premise, hypothesis = line.split(self.sep)
+            for word in hypothesis.strip().lower().split():
+                hist['total'][word] += 1
+                hist[label][word] += 1
+
+        # import pdb; pdb.set_trace()
+
+        return hist
     
     def _labels_to_idx(self,labels):
         labels_ids = list(set(labels))
@@ -177,7 +197,39 @@ class DiscriminativeDataset(Dataset):
                     hypothesis = ' '.join(hypothesis_splited)
                  
         
-        if self.dropout > 0.0:
+        if self.threshold_low:
+            def threshold(word):
+                word_count = self.hist['total'][word.lower()]
+                thresh = self.alpha / (word_count + self.alpha)
+                return thresh
+            # premise_splited = premise.split()
+            # premise_splited = [(word if np.random.random() > threshold(word) else self.tokenizer.unk_token)
+            #                     for word in premise_splited]
+            # premise = ' '.join(premise_splited)
+
+            hypothesis_splited = hypothesis.split()
+            hypothesis_splited = [(word if np.random.random() > threshold(word) else self.tokenizer.unk_token)
+                                for word in hypothesis_splited]
+            hypothesis = ' '.join(hypothesis_splited)
+
+        if self.threshold_high:
+            def threshold(word):
+                word = word.lower()
+                denote = self.hist['total'][word]
+                thresh = self.hist[lbl.item()][word] / denote if denote > 0 else 0
+                # thresh = max(thresh - 1/self.num_labels, 0)
+                return thresh
+            # premise_splited = premise.split()
+            # premise_splited = [(word if np.random.random() > threshold(word) else self.tokenizer.unk_token)
+            #                     for word in premise_splited]
+            # premise = ' '.join(premise_splited)
+
+            hypothesis_splited = hypothesis.split()
+            hypothesis_splited = [(word if (np.random.random() > threshold(word) or np.random.random() > self.dropout) 
+                                else self.tokenizer.unk_token) for word in hypothesis_splited]
+            hypothesis = ' '.join(hypothesis_splited)
+
+        elif self.dropout > 0.0:
             premise_splited = premise.split()
             premise_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
                                 for word in premise_splited]
@@ -187,7 +239,7 @@ class DiscriminativeDataset(Dataset):
             hypothesis_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
                                 for word in hypothesis_splited]
             hypothesis = ' '.join(hypothesis_splited)
-
+        
         
         return (premise,hypothesis,lbl)        # P, H, y
 

@@ -40,7 +40,7 @@ def get_max_len(l, sep, tokenizer):
         # print(it)
         it += 1
         split = sent.split(sep)
-        max_len = max([max_len, len(tokenizer.encode(split[0])), len(tokenizer.encode(split[1])) + 1])
+        max_len = max([max_len, len(tokenizer.encode(split[0]))])
 
     return max_len
 
