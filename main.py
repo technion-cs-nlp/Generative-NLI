@@ -14,7 +14,7 @@ get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_war
 
 from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
 from src.models import get_model, HybridModel
-from src.train import PremiseGeneratorTrainer, DiscriminativeTrainer, OnelabelTrainer, HybridTrainer
+from src.train import GenerativeTrainer, DiscriminativeTrainer, OnelabelTrainer, HybridTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -35,6 +35,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0,label_smoothing_epsilon=0.0,
                    tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='mean', 
+                   hyp_only_model=None,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0, gradual_unfreeze=False,
                    ret_res=False, gamma=0.0, 
@@ -122,14 +123,22 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     data_args = {}
     dataloader_args = {}
     train_args = {'reduction': reduction}
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
         if label is None:
-            trainer_type = PremiseGeneratorTrainer
+            trainer_type = GenerativeTrainer
         else:
             trainer_type = OnelabelTrainer
             train_args['label'] = label
+        if hyp_only_model is not None:
+            hyp = get_model(model='discriminative', model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                            model_path=hyp_only_model,num_labels=num_labels)
+            hyp = hyp.to(device)
+            train_args['hyp_prior_model']=hyp
+
         train_args['rev'] = rev
         train_args['possible_labels_ids'] = labels_ids
         train_args['epsilon'] = label_smoothing_epsilon
@@ -176,8 +185,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # ds_test = Subset(ds_test, range(batches * bs_test))
         # ds_val = Subset(ds_val, range(batches * bs_test))
         ds_train = Subset(ds_train, range(batches * bs_train))
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = get_model(  tokenizer=tokenizer, 
                         tokenizer_decoder=tokenizer_decoder, 
@@ -306,7 +313,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
         if label is None:
-            trainer_type = PremiseGeneratorTrainer
+            trainer_type = GenerativeTrainer
         else:
             trainer_type = OnelabelTrainer
         # data_args['tokenizer_decoder'] = tokenizer_decoder
@@ -533,6 +540,8 @@ def parse_cli():
     sp_exp.add_argument('--label-smoothing-epsilon', '-lse', type=float,
                         help='Epsilon argument for label smoothing (does not uses labels smoothing by \
                         default', default=0.0)
+    sp_exp.add_argument('--hyp-only-model', '-hom', type=str,
+                        help='If you want to weigh loss by htpothesis only output', default=None)
     sp_exp.add_argument('--tie-embeddings','-te', dest='tie_embeddings', action='store_true')
     sp_exp.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
     sp_exp.add_argument('--gradual-unfreeze','-gu', dest='gradual_unfreeze', action='store_true')

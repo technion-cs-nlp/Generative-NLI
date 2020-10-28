@@ -461,11 +461,11 @@ class Trainer(abc.ABC):
 
         return EpochResult(losses=losses, accuracy=accuracy)
 
-class PremiseGeneratorTrainer(Trainer):
+class GenerativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
                 epsilon=0.0,tokenizer_encoder=None, tokenizer_decoder=None, 
                 create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
-                rev=0.0, save_results=None, reduction='mean', device=None, **kwargs):
+                rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -483,6 +483,9 @@ class PremiseGeneratorTrainer(Trainer):
         self.rev = rev
         self.num_labels = len(self.labels)
         self.reduction = reduction
+        self.hyp_prior_model = hyp_prior_model
+        if self.hyp_prior_model is not None:
+            self.hyp_prior_model.eval()
 
     def _prepare_batch(self,batch):
         P,H,labels = batch
@@ -585,6 +588,11 @@ class PremiseGeneratorTrainer(Trainer):
                     loss_obj = (1.0-self.gamma) * loss + self.gamma * disc_loss
                     loss_obj = loss_obj.mean()
         else:
+            if self.hyp_prior_model is not None:
+                # import pdb; pdb.set_trace()
+                prior = self.hyp_prior_model(input_ids=y, attention_mask=decoder_attention_mask, labels=batch[2].to(self.device))
+                prior = prior[0]
+                loss *= prior
             loss_obj = self._reduce(loss, attention=None, reduction=self.reduction)
 
         # torch.cuda.empty_cache()
@@ -1020,7 +1028,7 @@ class DiscriminativeTrainer(Trainer):
         labels = labels.to('cpu')
         pred = torch.argmax(logits,dim=1).to('cpu')
 
-        # import pdb; pdb.set_trace()
+        import pdb; pdb.set_trace()
 
         if self.save_results is not None:
             possible_labels = ['contradiction','entailment','neutral']
@@ -1048,7 +1056,7 @@ class HybridTrainer(Trainer):
         self.last_freeze_loss = None
         self.freeze_ratio = 0.0
         self.labels = possible_labels_ids
-        self.gen = PremiseGeneratorTrainer(model.model1, optimizer, scheduler, device=device, 
+        self.gen = GenerativeTrainer(model.model1, optimizer, scheduler, device=device, 
                                                         possible_labels_ids=possible_labels_ids, tokenizer_encoder=tokenizer_encoder,
                                                         tokenizer_decoder=tokenizer_decoder, gradual_unfreeze=gradual_unfreeze)
         self.disc = DiscriminativeTrainer(model.model2, optimizer, scheduler, device=device, tokenizer=tokenizer_encoder,
