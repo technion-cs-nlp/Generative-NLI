@@ -1,5 +1,6 @@
 import abc
 import os
+import pdb
 import sys
 import tqdm
 import torch
@@ -541,7 +542,7 @@ class GenerativeTrainer(Trainer):
         }
         self.optimizer.zero_grad()
 
-        prior = -torch.log(torch.tensor(1/self.num_labels))
+        # prior = -torch.log(torch.tensor(1/self.num_labels))
 
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
         loss = outputs[0]
@@ -589,8 +590,12 @@ class GenerativeTrainer(Trainer):
                     loss_obj = loss_obj.mean()
         else:
             if self.hyp_prior_model is not None:
-                # import pdb; pdb.set_trace()
-                prior = self.hyp_prior_model(input_ids=y, attention_mask=decoder_attention_mask, labels=batch[2].to(self.device))
+                batch_rev = (batch[1], batch[0], batch[2])
+                _, _, y_hyp, attention_mask_hyp = self._prepare_batch(batch_rev)
+                y_hyp = y_hyp.to(self.device)
+                attention_mask_hyp = attention_mask_hyp.to(self.device)
+                with torch.no_grad():
+                    prior = self.hyp_prior_model(input_ids=y_hyp, attention_mask=attention_mask_hyp, labels=batch[2].to(self.device))
                 prior = prior[0]
                 loss *= prior
             loss_obj = self._reduce(loss, attention=None, reduction=self.reduction)
@@ -914,7 +919,7 @@ class OnelabelTrainer(Trainer):
 
 class DiscriminativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3, 
-                tokenizer=None, save_results=None, device=None, **kwargs):
+                tokenizer=None, save_results=None, hyp_prior_model=None, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
@@ -923,6 +928,9 @@ class DiscriminativeTrainer(Trainer):
         self.freeze_ratio = 0.0
         self.labels = torch.tensor(range(num_labels))
         self.save_results = save_results
+        self.hyp_prior_model = hyp_prior_model
+        if self.hyp_prior_model is not None:
+            self.hyp_prior_model.eval()
 
     def _prepare_batch(self, batch):
         input_dict = {}
@@ -973,6 +981,17 @@ class DiscriminativeTrainer(Trainer):
         outputs = self.model(input_ids=x, **model_kwargs)
 
         loss, logits = outputs[:2]
+
+        if self.hyp_prior_model is not None:
+            batch_hyp = (batch[1], batch[2])
+            x_hyp, attention_mask_hyp, labels_hyp, token_type_ids_hyp = self._prepare_batch(batch_hyp)
+            x_hyp, attention_mask_hyp, labels_hyp, token_type_ids_hyp = x_hyp.to(self.device), attention_mask_hyp.to(self.device), labels_hyp.to(self.device), token_type_ids_hyp.to(self.device)
+            with torch.no_grad():
+                prior = self.hyp_prior_model(input_ids=x_hyp, attention_mask=attention_mask_hyp, labels=labels_hyp, token_type_ids=token_type_ids_hyp)
+            prior = prior[0]
+            # import pdb; pdb.set_trace()
+            loss *= prior
+
         loss = loss.mean()
 
         del x, attention_mask

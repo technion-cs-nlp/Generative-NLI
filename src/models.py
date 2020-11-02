@@ -44,9 +44,11 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         encoder_model_name, decoder_model_name = (model_name, decoder_model_name)
 
         if model_path is None:
-            res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name, tie_encoder_decoder=tie_embeddings)
+            res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name, encoder_tie_encoder_decoder=tie_embeddings,
+                                            decoder_tie_encoder_decoder=tie_embeddings)
             if label is None:
                 res_model.encoder.resize_token_embeddings(len(tokenizer))
+                res_model.config.encoder.vocab_size = len(tokenizer)
 
             # if tie_embeddings:
             #     res_model.decoder.cls.predictions.decoder.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
@@ -134,5 +136,8 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     if model_path is None and not 'discriminative'.startswith(model) \
         and label is None:          ## only change embeddings size if its not a trained model
         res_model.resize_token_embeddings(len(tokenizer))
-        
+        if hasattr(res_model.config,"encoder"):
+            res_model.config.encoder.vocab_size = len(tokenizer)
+        else:
+            res_model.config.vocab_size = len(tokenizer)
     return res_model
