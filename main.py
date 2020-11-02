@@ -125,6 +125,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     train_args = {'reduction': reduction}
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if hyp_only_model is not None:
+            hyp = get_model(model='discriminative', model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                            model_path=hyp_only_model,num_labels=num_labels)
+            hyp = hyp.to(device)
+            train_args['hyp_prior_model']=hyp
     
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
@@ -133,11 +139,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         else:
             trainer_type = OnelabelTrainer
             train_args['label'] = label
-        if hyp_only_model is not None:
-            hyp = get_model(model='discriminative', model_name=decoder_model_name if decoder_model_name is not None else model_name,
-                            model_path=hyp_only_model,num_labels=num_labels)
-            hyp = hyp.to(device)
-            train_args['hyp_prior_model']=hyp
 
         train_args['rev'] = rev
         train_args['possible_labels_ids'] = labels_ids
