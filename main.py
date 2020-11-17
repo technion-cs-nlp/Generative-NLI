@@ -32,7 +32,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    drive=False, do_test=True,
                    # Training params
                    bs_train=16, bs_test=8, batches=0, epochs=20,
-                   early_stopping=3, checkpoints=None, lr=0.0005, reg=1e-3, max_len=0, decoder_max_len=0,
+                   early_stopping=3, checkpoints=None, lr=0.001, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0,label_smoothing_epsilon=0.0,
                    tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='mean', 
                    hyp_only_model=None,
@@ -77,7 +77,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name if 'patrick' not in model_name else 'bert-base-uncased')
     if 'gpt' in model_name:
         tokenizer.pad_token = tokenizer.unk_token
     tokenizer_decoder = None
@@ -104,19 +104,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
         # test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
 
-    
-
     if not model_type.startswith('disc'):
-
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
-
         tokenizer.add_tokens(all_labels)
         labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        # labels_ids = [2870,2874,2876]
         print(f'Labels IDs: {labels_ids}')
-        # if tokenizer_decoder is not None:
-        #     tokenizer_decoder.add_tokens(all_labels)
-        #     labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        #     print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
     dataset = None
     trainer_type = None
@@ -126,11 +119,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
     if hyp_only_model is not None:
-            hyp = get_model(model='discriminative', model_name=decoder_model_name if decoder_model_name is not None else model_name,
-                            model_path=hyp_only_model,num_labels=num_labels)
-            hyp = hyp.to(device)
-            train_args['hyp_prior_model']=hyp
+        hyp = get_model(model='discriminative', model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                        model_path=hyp_only_model,num_labels=num_labels)
+        hyp = hyp.to(device)
+        train_args['hyp_prior_model']=hyp
     
     if model_type in ['encode-decode','bart','shared']:
         dataset = DiscriminativeDataset
@@ -216,6 +210,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     num_batches = batches if batches > 0 else len(dl_train)
     num_steps = epochs * num_batches
     print(f"Number of training steps: {num_steps}")
+    scheduler = None
+    # scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches, num_training_steps=num_steps)
     writer = SummaryWriter()
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
@@ -298,6 +294,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
         tokenizer.add_tokens(all_labels)
         labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        # labels_ids = [2870,2874,2876]
         print(f'Labels IDs: {labels_ids}')
         # if tokenizer_decoder is not None:
         #     tokenizer_decoder.add_tokens(all_labels)

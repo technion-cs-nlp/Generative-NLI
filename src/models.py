@@ -44,27 +44,36 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         encoder_model_name, decoder_model_name = (model_name, decoder_model_name)
 
         if model_path is None:
-            res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name, encoder_tie_encoder_decoder=tie_embeddings,
-                                            decoder_tie_encoder_decoder=tie_embeddings)
+            encoder_decoder_params = {
+                'tie_encoder_decoder':tie_embeddings,
+            }
+            res_model = EncoderDecoderModel.from_encoder_decoder_pretrained(encoder_model_name, decoder_model_name, **encoder_decoder_params)
+            if "bert" in encoder_model_name:
+                res_model.config.decoder_start_token_id = tokenizer.cls_token_id
+                res_model.config.eos_token_id = tokenizer.sep_token_id
+                res_model.config.pad_token_id = tokenizer.pad_token_id
             if label is None:
+                pass
                 res_model.encoder.resize_token_embeddings(len(tokenizer))
                 res_model.config.encoder.vocab_size = len(tokenizer)
-
-            # if tie_embeddings:
-            #     res_model.decoder.cls.predictions.decoder.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
-            #     res_model.decoder.bert.embeddings.word_embeddings.weight.data = res_model.encoder.embeddings.word_embeddings.weight.data
+            res_model.config.vocab_size = res_model.config.encoder.vocab_size
 
         else:
             res_model = EncoderDecoderModel.from_pretrained(model_path)
+            if 'patrick' in model_path:
+                pass
+                res_model.encoder.resize_token_embeddings(len(tokenizer))
+                res_model.config.encoder.vocab_size = len(tokenizer)
+                res_model.config.vocab_size = len(tokenizer)
 
-        if tokenizer_decoder is None:
-            res_model.config.decoder_start_token_id = tokenizer.cls_token_id
-            res_model.config.eos_token_id = tokenizer.sep_token_id
-            res_model.config.pad_token_id = tokenizer.pad_token_id
-        else:
-            res_model.config.decoder_start_token_id = tokenizer_decoder.bos_token_id
-            res_model.config.eos_token_id = tokenizer_decoder.eos_token_id
-        res_model.config.max_length = 120
+        # if tokenizer_decoder is None:
+        #     res_model.config.decoder_start_token_id = tokenizer.cls_token_id
+        #     res_model.config.eos_token_id = tokenizer.sep_token_id
+        #     res_model.config.pad_token_id = tokenizer.pad_token_id
+        # else:
+        #     res_model.config.decoder_start_token_id = tokenizer_decoder.bos_token_id
+        #     res_model.config.eos_token_id = tokenizer_decoder.eos_token_id
+        res_model.config.max_length = 140
         res_model.config.min_length = 5
         res_model.config.no_repeat_ngram_size = 3
         res_model.early_stopping = True
@@ -135,6 +144,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
     if model_path is None and not 'discriminative'.startswith(model) \
         and label is None:          ## only change embeddings size if its not a trained model
+        # pass
         res_model.resize_token_embeddings(len(tokenizer))
         if hasattr(res_model.config,"encoder"):
             res_model.config.encoder.vocab_size = len(tokenizer)

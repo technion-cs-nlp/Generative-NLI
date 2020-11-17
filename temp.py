@@ -7,20 +7,20 @@ hard_str = ''
 if hard:
     hard_str='_hard'
 
-with open('loss_results/cont10.res'+hard_str) as f:
+with open('loss_results/bart_cont'+hard_str) as f:
     cont_lines = f.readlines()
 
-with open('loss_results/ent10.res'+hard_str) as f:
+with open('loss_results/bart_ent'+hard_str) as f:
     ent_lines = f.readlines()
 
-with open('loss_results/neut10.res'+hard_str) as f:
+with open('loss_results/bart_neut'+hard_str) as f:
     neut_lines = f.readlines()
 
 with open('/home/dimion/PremiseGeneratorBert/data/snli_1.0/cl_snli_test'+hard_str+'_lbl_file') as f:
     labels = f.readlines()
 normal = [1,1,1]      ## regular
-# normal = [5.856359481811523,5.643258094787598,3.8317277431488037]
-# normal = [17838.020307973027, 18448.63033886254, 17821.202359586954]
+# normal = [61.238,67.922,49.642]
+# normal = [49.909,50.972,41.950]
 # normal = [0.32949918566775244, 0.34283387622149836, 0.3276669381107492]     ## percent in test
 normal = [2.0/3-i/sum(normal) for i in normal]
 s=0
