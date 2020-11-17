@@ -534,6 +534,7 @@ class GenerativeTrainer(Trainer):
         encoder_attention_mask = encoder_attention_mask.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
 
+        num_correct = 0
         batch_size = x.shape[0]
 
         ## Needed because that gpt2 handles paddings differently
@@ -581,6 +582,16 @@ class GenerativeTrainer(Trainer):
             # loss_obj = (1-self.gamma) * loss + self.gamma * disc_loss   #==(1-self.gamma) * loss + self.gamma * disc_loss
             loss_obj = loss + self.gamma * log_sum_exp_losses
             loss_obj = self._reduce(loss_obj,attention=None,reduction=self.reduction)
+
+            ## validate:
+            with torch.no_grad():
+                ret = torch.min(neg_log_prob.T,dim=0)
+                pred = ret.indices
+                losses = ret.values
+                # pred = torch.tensor([self.labels[i] for i in pred])
+                pred.to('cpu')
+                correct_labels = batch[-1].to('cpu')
+                num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
         else:
             if self.hyp_prior_model is not None:
                 batch_rev = (batch[1], batch[0], batch[2])
@@ -607,11 +618,12 @@ class GenerativeTrainer(Trainer):
 
         # validate on train set
         # num_correct = sum(loss < min_loss) if min_loss is not None else 0
-        with torch.no_grad():
-            self.model.eval()  # small hack but it's working
-            acc = self.test_batch(batch)
-            num_correct = acc.num_correct
-            self.model.train()
+        if self.gamma == 0.0:
+            with torch.no_grad():
+                self.model.eval()  # small hack but it's working
+                acc = self.test_batch(batch)
+                num_correct = acc.num_correct
+                self.model.train()
 
         loss_item = loss_obj.item()
 
