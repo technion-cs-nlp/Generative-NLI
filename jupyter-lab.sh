@@ -19,7 +19,7 @@
 # Conda parameters
 #
 CONDA_HOME=$HOME/miniconda3
-CONDA_ENV=base
+CONDA_ENV=dimi
 
 unset XDG_RUNTIME_DIR
 source $CONDA_HOME/etc/profile.d/conda.sh
