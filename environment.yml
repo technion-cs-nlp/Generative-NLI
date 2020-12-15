@@ -20,7 +20,20 @@ dependencies:
   - tqdm
   - filelock
   - tensorboard
+  - absl-py
+  - scipy
+  - gunicorn
+  - pip
   - pip:
     - nbmerge
     - pytest-xdist
     - nlp
+    - tensorflow
+    - tensorflow-datasets
+    - lime
+    - rouge-score
+    - sacrebleu
+    - umap-learn
+    - google-cloud-translate
+    - rouge-score
+    - annoy
