@@ -29,8 +29,10 @@ NUM_NODES=1
 NUM_CORES=2
 NUM_GPUS=1
 JOB_NAME="Premise-generator"
-MAIL_USER="dimion@campus.technion.ac.il"
+MAIL_USER="dimion@cs.technion.ac.il"
 MAIL_TYPE=ALL # Valid values are NONE, BEGIN, END, FAIL, REQUEUE, ALL
+QUEUE="nlp"
+
 
 ###
 # Conda parameters
@@ -41,11 +43,12 @@ CONDA_ENV=dimi
 sbatch \
 	-N $NUM_NODES \
 	-c $NUM_CORES \
+	-p $QUEUE \
 	--gres=gpu:$NUM_GPUS \
 	--job-name $JOB_NAME \
 	--mail-user $MAIL_USER \
 	--mail-type $MAIL_TYPE \
-	-o 'slurm-%N-%j.out' \
+	-o 'slurm_out/%j.out' \
 <<EOF
 #!/bin/bash
 echo "*** SLURM BATCH JOB '$JOB_NAME' STARTING ***"
