@@ -54,6 +54,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     tf = torchvision.transforms.ToTensor()
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     hard_test_labels = []
     hard_test_lines = []
 
@@ -61,6 +63,18 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
     if hard_validation:
         val_str += '_hard'
+
+    attribution_paths = [None,None,None,None]
+
+    if attribution_map is not None:
+        if not os.path.isdir(attribution_map):
+            raise FileNotFoundError(f"There is no such folder: {attribution_map}")
+        files = [f for f in os.listdir(attribution_map) if os.path.isfile(os.path.join(attribution_map, f))]
+        for i,prefix in enumerate(["train_set","validation_set","test_set","hard_test_set"]):
+            f = list(filter(lambda f: f.startswith(prefix), files))
+            if len(f)>0:
+                path_ = os.path.join(attribution_map, f[0])
+                attribution_paths[i] = torch.load(path_, map_location=device)
 
     with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
@@ -110,13 +124,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
 
     if not model_type.startswith('disc'):
-        all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
-        tokenizer.add_tokens(all_labels)
-        labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        # labels_ids = [2870,2874,2876]
+        # all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
+        # tokenizer.add_tokens(all_labels)
+        # labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        labels_ids = [2870,2874,2876]
         print(f'Labels IDs: {labels_ids}')
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     dataset = None
     trainer_type = None
@@ -167,12 +180,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['num_labels'] = num_labels
 
     # import pdb; pdb.set_trace()
-    if attribution_map is not None and len(attribution_map) > 2:
-        data_args['attribution_map'] = torch.load(attribution_map[2], map_location=device)
+    if attribution_map is not None:
+        data_args['attribution_map'] = attribution_paths[2]
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
 
-    if attribution_map is not None and len(attribution_map) > 1:
-        data_args['attribution_map'] = torch.load(attribution_map[1], map_location=device)
+    if attribution_map is not None:
+        data_args['attribution_map'] = attribution_paths[1]
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
     # data_args['dropout'] = word_dropout
     data_args.update({
@@ -186,7 +199,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         'threshold_low': threshold_low,
     })
     if attribution_map is not None:
-        data_args['attribution_map'] = torch.load(attribution_map[0], map_location=device)
+        data_args['attribution_map'] = attribution_paths[0]
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
 
     if batches > 0:
@@ -239,8 +252,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if do_test:
         trainer.test(dl_test, writer=writer)
         if len(hard_test_labels) > 0 and len(hard_test_lines) > 0:
-            if attribution_map is not None and len(attribution_map) > 3:
-                data_args['attribution_map'] = torch.load(attribution_map[3], map_location=device)
+            if attribution_map is not None:
+                data_args['attribution_map'] = attribution_paths[4]
             else:
                 data_args.pop('attribution_map',None)
             ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
@@ -308,11 +321,10 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     num_labels = len(all_labels_text)
 
     if not model_type.startswith('disc'):
-        all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
-
-        tokenizer.add_tokens(all_labels)
-        labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        # labels_ids = [2870,2874,2876]
+        # all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
+        # tokenizer.add_tokens(all_labels)
+        # labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        labels_ids = [2870,2874,2876]
         print(f'Labels IDs: {labels_ids}')
         # if tokenizer_decoder is not None:
         #     tokenizer_decoder.add_tokens(all_labels)
@@ -524,8 +536,8 @@ def parse_cli():
                         help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
                         default='start')
     sp_exp.add_argument('--non-discriminative-bias', '-ndb', dest='non_discriminative_bias', action='store_true')
-    sp_exp.add_argument('--attribution-map', '-am', type=str, nargs='+',
-                        help='paths of attribution maps, 1st is train, then validation, test and hard test',
+    sp_exp.add_argument('--attribution-map', '-am', type=str, 
+                        help='path of attribution maps folder',
                         default=None)
     sp_exp.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
 
@@ -635,8 +647,8 @@ def parse_cli():
                          help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
     sp_test.add_argument('--create-premises', '-cp', dest='create_premises', action='store_true')
 
-    sp_test.add_argument('--attribution-map', '-am', type=str, nargs='+',
-                        help='paths of attribution maps, 1st is train, then validation, test and hard test',
+    sp_test.add_argument('--attribution-map', '-am', type=str, 
+                        help='path of attribution maps folder',
                         default=None)
     sp_test.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
     sp_test.set_defaults(create_premises=False, move_to_hypothesis=False)
