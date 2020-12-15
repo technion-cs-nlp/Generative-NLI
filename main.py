@@ -10,7 +10,8 @@ import torch
 import torchvision
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoTokenizer, AdamW, AutoModel, \
-get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup, get_constant_schedule_with_warmup
+    get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup, \
+    get_constant_schedule_with_warmup
 
 from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
 from src.models import get_model, HybridModel
@@ -33,15 +34,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Training params
                    bs_train=16, bs_test=8, batches=0, epochs=20,
                    early_stopping=3, checkpoints=None, lr=0.001, reg=1e-3, max_len=0, decoder_max_len=0,
-                   optimizer_type='Adam', momentum=0.9, word_dropout=0.0,label_smoothing_epsilon=0.0,
-                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='mean', 
-                   hyp_only_model=None,
+                   optimizer_type='Adam', momentum=0.9, word_dropout=0.0, label_smoothing_epsilon=0.0,
+                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='mean',
+                   hyp_only_model=None, hard_validation=False,
                    # Model params
-                   beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0, gradual_unfreeze=False,
-                   ret_res=False, gamma=0.0, 
+                   beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
+                   gradual_unfreeze=False,
+                   ret_res=False, gamma=0.0,
                    # Dataset params
                    inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
-                   label=None, threshold_high=False, threshold_low=False,
+                   label=None, threshold_high=False, threshold_low=False, attribution_map=None, move_to_hypothesis=False,
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -57,6 +59,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
     val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
+    if hard_validation:
+        val_str += '_hard'
 
     with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
@@ -70,8 +74,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         val_labels = val_labels_file.readlines()
     with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
-    if os.path.isfile(data_dir_prefix +  '_test_hard_lbl_file') and \
-        os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
+    if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
+            os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
         with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
             hard_test_labels = val_labels_file.readlines()
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
@@ -87,10 +91,11 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         tokenizer_decoder = GPT2Tokenizer.from_pretrained(decoder_model_name)
         tokenizer_decoder.pad_token = tokenizer_decoder.unk_token
 
-    size_test = batches * bs_test if batches > 0 else 10**8
-    size_train = batches * bs_train if batches > 0 else 10**8
+    size_test = batches * bs_test if batches > 0 else 10 ** 8
+    size_train = batches * bs_train if batches > 0 else 10 ** 8
 
-    all_labels_text = list(set(test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
+    all_labels_text = list(set(
+        test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
     all_labels_text.sort()
     num_labels = len(all_labels_text)
 
@@ -111,22 +116,22 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # labels_ids = [2870,2874,2876]
         print(f'Labels IDs: {labels_ids}')
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     dataset = None
     trainer_type = None
-    data_args = {}
+    data_args = {"move_to_hypothesis":move_to_hypothesis}
     dataloader_args = {}
     train_args = {'reduction': reduction}
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-
     if hyp_only_model is not None:
-        hyp = get_model(model='discriminative', model_name=decoder_model_name if decoder_model_name is not None else model_name,
-                        model_path=hyp_only_model,num_labels=num_labels)
+        hyp = get_model(model='discriminative',
+                        model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                        model_path=hyp_only_model, num_labels=num_labels)
         hyp = hyp.to(device)
-        train_args['hyp_prior_model']=hyp
-    
-    if model_type in ['encode-decode','bart','shared']:
+        train_args['hyp_prior_model'] = hyp
+
+    if model_type in ['encode-decode', 'bart', 'shared']:
         dataset = DiscriminativeDataset
         if label is None:
             trainer_type = GenerativeTrainer
@@ -161,19 +166,27 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['gradual_unfreeze'] = gradual_unfreeze
         train_args['num_labels'] = num_labels
 
+    # import pdb; pdb.set_trace()
+    if attribution_map is not None and len(attribution_map) > 2:
+        data_args['attribution_map'] = torch.load(attribution_map[2], map_location=device)
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
+
+    if attribution_map is not None and len(attribution_map) > 1:
+        data_args['attribution_map'] = torch.load(attribution_map[1], map_location=device)
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
     # data_args['dropout'] = word_dropout
     data_args.update({
-        'inject_bias':inject_bias,
-        'bias_ids':bias_ids,
-        'bias_ratio':bias_ratio,
-        'bias_location':bias_location,
+        'inject_bias': inject_bias,
+        'bias_ids': bias_ids,
+        'bias_ratio': bias_ratio,
+        'bias_location': bias_location,
         'non_discriminative_bias': non_discriminative_bias,
-        'dropout':word_dropout,
-        'threshold_high':threshold_high,
-        'threshold_low':threshold_low,
+        'dropout': word_dropout,
+        'threshold_high': threshold_high,
+        'threshold_low': threshold_low,
     })
+    if attribution_map is not None:
+        data_args['attribution_map'] = torch.load(attribution_map[0], map_location=device)
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
 
     if batches > 0:
@@ -181,38 +194,38 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # ds_val = Subset(ds_val, range(batches * bs_test))
         ds_train = Subset(ds_train, range(batches * bs_train))
 
-    model = get_model(  tokenizer=tokenizer, 
-                        tokenizer_decoder=tokenizer_decoder, 
-                        model=model_type, 
-                        model_name=model_name,
-                        decoder_model_name=decoder_model_name, 
-                        model_path=model_path, 
-                        param_freezing_ratio=param_freezing_ratio,
-                        tie_embeddings=tie_embeddings,
-                        label=label,
-                        gamma=gamma)
+    model = get_model(tokenizer=tokenizer,
+                      tokenizer_decoder=tokenizer_decoder,
+                      model=model_type,
+                      model_name=model_name,
+                      decoder_model_name=decoder_model_name,
+                      model_path=model_path,
+                      param_freezing_ratio=param_freezing_ratio,
+                      tie_embeddings=tie_embeddings,
+                      label=label,
+                      gamma=gamma)
 
     model.to(device)
-    
-    
+
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True, **dataloader_args)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, **dataloader_args)
-    
+
     if optimizer_type.lower() == 'adam':
         optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
     elif optimizer_type.lower() == 'sgd':
         optimizer = SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
     else:
         raise AttributeError('only SGD and Adam supported for now')
-    
+
     # import pdb; pdb.set_trace()
     num_batches = batches if batches > 0 else len(dl_train)
     num_steps = epochs * num_batches
     print(f"Number of training steps: {num_steps}")
     scheduler = None
     # scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches, num_training_steps=num_steps)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=2 * num_batches,
+                                                num_training_steps=num_steps)
     writer = SummaryWriter()
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
@@ -220,12 +233,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     if ret_res:
         del model
-        return fit_res.test_acc[-4] if len(fit_res.test_acc) >=4 else fit_res.test_acc[-1]
+        return fit_res.test_acc[-4] if len(fit_res.test_acc) >= 4 else fit_res.test_acc[-1]
     save_experiment(run_name, out_dir, cfg, fit_res)
 
     if do_test:
-        trainer.test(dl_test,writer=writer)
+        trainer.test(dl_test, writer=writer)
         if len(hard_test_labels) > 0 and len(hard_test_lines) > 0:
+            if attribution_map is not None and len(attribution_map) > 3:
+                data_args['attribution_map'] = torch.load(attribution_map[3], map_location=device)
+            else:
+                data_args.pop('attribution_map',None)
             ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
@@ -234,13 +251,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
 
 def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_1.0/cl_snli',
-               model_name='bert-base-uncased', model_path=None, model_type='encode-decode', 
+               model_name='bert-base-uncased', model_path=None, model_type='encode-decode',
                decoder_model_name=None, seed=None, save_results=None,
                # Training params
                bs_test=8, batches=0,
-               checkpoints=None, max_len=0, decoder_max_len=0, 
-               hypothesis_only=False, generate_hypothesis=False, create_premises=False, 
-               label=0,
+               checkpoints=None, max_len=0, decoder_max_len=0,
+               hypothesis_only=False, generate_hypothesis=False, create_premises=False,
+               label=0, attribution_map=None, move_to_hypothesis=False,
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -250,6 +267,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     cfg = locals()
 
     tf = torchvision.transforms.ToTensor()
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     hard_test_labels = None
     hard_test_lines = None
@@ -266,12 +285,12 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
     if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
-        os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
+            os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
         with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
             hard_test_labels = val_labels_file.readlines()
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
-    
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if 'gpt' in model_name:
         tokenizer.pad_token = tokenizer.unk_token
@@ -282,14 +301,13 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         tokenizer_decoder = GPT2Tokenizer.from_pretrained(decoder_model_name)
         tokenizer_decoder.pad_token = tokenizer_decoder.unk_token
 
-    size_test = batches * bs_test if batches > 0 else 10**8
+    size_test = batches * bs_test if batches > 0 else 10 ** 8
 
     all_labels_text = list(set(test_labels[:size_test] + val_labels[:size_test] + hard_test_labels[:size_test]))
     all_labels_text.sort()
     num_labels = len(all_labels_text)
 
     if not model_type.startswith('disc'):
-
         all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
         tokenizer.add_tokens(all_labels)
@@ -306,9 +324,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {}
     dataloader_args = {}
     train_args = {}
-    
+
     train_args['save_results'] = save_results
-    if model_type in ['encode-decode','bart','shared']:
+    if model_type in ['encode-decode', 'bart', 'shared']:
         dataset = DiscriminativeDataset
         if label is None:
             trainer_type = GenerativeTrainer
@@ -330,49 +348,52 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         train_args['num_labels'] = num_labels
         train_args['tokenizer'] = tokenizer
 
-    
     # import pdb; pdb.set_trace()
+    if attribution_map is not None:
+        data_args['attribution_map'] = torch.load(attribution_map[0], map_location=device)
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
+
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
         ds_val = Subset(ds_val, range(batches * bs_test))
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     model = get_model(tokenizer=tokenizer, tokenizer_decoder=tokenizer_decoder, model=model_type, model_name=model_name,
-                            decoder_model_name=decoder_model_name, model_path=model_path)
+                      decoder_model_name=decoder_model_name, model_path=model_path)
 
     model.to(device)
-                            
+
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, **dataloader_args)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
 
     writer = None
     if checkpoints is None:
         writer = SummaryWriter()
-    
-    trainer = trainer_type(model, optimizer=None, scheduler=None, max_len=max_len, device=device, **train_args)
-    fit_res = trainer.test(dl_test,checkpoints=checkpoints, writer=writer)
+
+    trainer = trainer_type(model, optimizer=None, scheduler=None, device=device, **train_args)
+    fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_labels is not None and hard_test_lines is not None:
-            if hasattr(trainer,'save_results') and trainer.save_results is not None:
-                trainer.save_results += '_hard'
-            ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
-            if batches > 0:
-                ds_test = Subset(ds_hard_test, range(batches * bs_test))
-            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, **dataloader_args)
-            fit_res = trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
-            save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
+        if hasattr(trainer, 'save_results') and trainer.save_results is not None:
+            trainer.save_results += '_hard'
+        if attribution_map is not None and len(attribution_map) > 1:
+            data_args['attribution_map'] = torch.load(attribution_map[1], map_location=device)
+        else:
+            data_args.pop('attribution_map', None)
+        ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
+        if batches > 0:
+            ds_test = Subset(ds_hard_test, range(batches * bs_test))
+        dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, **dataloader_args)
+        fit_res = trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
+        save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
 
 
-def combine_models( data_dir_prefix='./data/snli_1.0/cl_snli',bs_test=8,
-                    modelA_path=None, modelA_type=None, 
-                    modelA_name=None, modelB_path=None, 
-                    modelB_type=None, modelB_name=None, 
-                    gamma=0.5,hypothesis_only=False):
-
+def combine_models(data_dir_prefix='./data/snli_1.0/cl_snli', bs_test=8,
+                   modelA_path=None, modelA_type=None,
+                   modelA_name=None, modelB_path=None,
+                   modelB_type=None, modelB_name=None,
+                   gamma=0.5, hypothesis_only=False):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     hard_test_labels = None
@@ -387,7 +408,7 @@ def combine_models( data_dir_prefix='./data/snli_1.0/cl_snli',bs_test=8,
     with open(data_dir_prefix + '_val_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
     if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
-        os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
+            os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
         with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
             hard_test_labels = val_labels_file.readlines()
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
@@ -400,13 +421,13 @@ def combine_models( data_dir_prefix='./data/snli_1.0/cl_snli',bs_test=8,
 
     modelA = get_model(model=modelA_type, model_name=modelA_name, model_path=modelA_path)
     modelB = get_model(model=modelB_type, model_name=modelB_name, model_path=modelB_path)
-    model = HybridModel(modelA,modelB,gamma)
+    model = HybridModel(modelA, modelB, gamma)
 
     model.to(device)
 
     tokenizerA = AutoTokenizer.from_pretrained(modelA_name)
 
-    size_test = 10**8
+    size_test = 10 ** 8
 
     all_labels_text = list(set(test_labels[:size_test] + val_labels[:size_test] + hard_test_labels[:size_test]))
     all_labels_text.sort()
@@ -419,7 +440,7 @@ def combine_models( data_dir_prefix='./data/snli_1.0/cl_snli',bs_test=8,
 
     if modelA_name == modelB_name:
         tokenizerB = tokenizerA
-    
+
     else:
         tokenizerB = AutoTokenizer.from_pretrained(modelB_name)
         tokenizerB.add_tokens(all_labels)
@@ -427,25 +448,26 @@ def combine_models( data_dir_prefix='./data/snli_1.0/cl_snli',bs_test=8,
         print(f'Labels IDs for second model: {labels_ids_decoder}')
 
     datasetA = PremiseGenerationDataset
-    DatasetA = datasetA(test_lines,test_labels,tokenizerA)
+    DatasetA = datasetA(test_lines, test_labels, tokenizerA)
 
     datasetB = HypothesisOnlyDataset if hypothesis_only else DiscriminativeDataset
-    DatasetB = datasetB(test_lines,test_labels,tokenizerB)
+    DatasetB = datasetB(test_lines, test_labels, tokenizerB)
 
-    dataset = DualDataset(DatasetA,DatasetB)
+    dataset = DualDataset(DatasetA, DatasetB)
     dataloader = torch.utils.data.DataLoader(dataset, bs_test, shuffle=False)
 
-    trainer = DualTesterTrainer(model, tokenizer=tokenizerB, optimizer=None, scheduler=None, max_len=128, num_labels=3, possible_labels_ids=labels_ids, device=device)
+    trainer = DualTesterTrainer(model, tokenizer=tokenizerB, optimizer=None, scheduler=None, max_len=128, num_labels=3,
+                                possible_labels_ids=labels_ids, device=device)
     trainer.test(dataloader)
 
     if hard_test_labels is not None and hard_test_lines is not None:
-            ds_hard_testA = datasetA(hard_test_lines, hard_test_labels, tokenizerA)
-            ds_hard_testB = datasetB(hard_test_lines, hard_test_labels, tokenizerB)
+        ds_hard_testA = datasetA(hard_test_lines, hard_test_labels, tokenizerA)
+        ds_hard_testB = datasetB(hard_test_lines, hard_test_labels, tokenizerB)
 
-            ds_hard_test = DualDataset(ds_hard_testA, ds_hard_testB)
-            
-            dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
-            trainer.test(dl_hard_test)
+        ds_hard_test = DualDataset(ds_hard_testA, ds_hard_testB)
+
+        dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
+        trainer.test(dl_hard_test)
 
 
 def save_experiment(run_name, out_dir, config, fit_res):
@@ -487,19 +509,26 @@ def parse_cli():
     sp_exp.add_argument('--drive', '-d', type=bool, help='Pass "True" if you are running this on Google Colab',
                         default=False, required=False)
     sp_exp.add_argument('--do-test', '-t', type=bool, help='Pass "True" if you want to run a test on test set',
-                        default=True, required=False)   
+                        default=True, required=False)
     # # Dataset
-    #inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', seed=42                 
-    sp_exp.add_argument('--inject-bias', type=int, help='Select number of labels to inject bias to their corresponding hypotheses',
+    # inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', seed=42
+    sp_exp.add_argument('--inject-bias', type=int,
+                        help='Select number of labels to inject bias to their corresponding hypotheses',
                         default=0)
     sp_exp.add_argument('--bias-ids', type=list, help='Select the id of the biases symbols',
-                        default=[2870,2874,2876])
-    sp_exp.add_argument('--bias-ratio', type=float, help='Select the percentege of labels to inject bias to their corresponding hypotheses',
+                        default=[2870, 2874, 2876])
+    sp_exp.add_argument('--bias-ratio', type=float,
+                        help='Select the percentege of labels to inject bias to their corresponding hypotheses',
                         default=0.5)
-    sp_exp.add_argument('--bias-location', type=str, help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
+    sp_exp.add_argument('--bias-location', type=str,
+                        help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
                         default='start')
-    sp_exp.add_argument('--non-discriminative-bias','-ndb', dest='non_discriminative_bias', action='store_true')
-    
+    sp_exp.add_argument('--non-discriminative-bias', '-ndb', dest='non_discriminative_bias', action='store_true')
+    sp_exp.add_argument('--attribution-map', '-am', type=str, nargs='+',
+                        help='paths of attribution maps, 1st is train, then validation, test and hard test',
+                        default=None)
+    sp_exp.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
+
     # # Training
     sp_exp.add_argument('--bs-train', type=int, help='Train batch size',
                         default=16, metavar='BATCH_SIZE')
@@ -540,18 +569,20 @@ def parse_cli():
                         default', default=0.0)
     sp_exp.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)
-    sp_exp.add_argument('--tie-embeddings','-te', dest='tie_embeddings', action='store_true')
-    sp_exp.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
-    sp_exp.add_argument('--gradual-unfreeze','-gu', dest='gradual_unfreeze', action='store_true')
-    sp_exp.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
-    sp_exp.add_argument('--threshold-high','-th', dest='threshold_high', action='store_true')
-    sp_exp.add_argument('--threshold-low','-tl', dest='threshold_low', action='store_true')
+    sp_exp.add_argument('--tie-embeddings', '-te', dest='tie_embeddings', action='store_true')
+    sp_exp.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
+    sp_exp.add_argument('--gradual-unfreeze', '-gu', dest='gradual_unfreeze', action='store_true')
+    sp_exp.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
+    sp_exp.add_argument('--threshold-high', '-th', dest='threshold_high', action='store_true')
+    sp_exp.add_argument('--threshold-low', '-tl', dest='threshold_low', action='store_true')
+    sp_exp.add_argument('--hard-validation', '-hv', dest='hard_validation', action='store_true')
     sp_exp.add_argument('--label', '-l', type=int,
                         help='Create generative model only for one label', default=None)
     sp_exp.add_argument('--rev', type=float,
                         help='For hinge loss', default=0.0)
-    sp_exp.set_defaults(threshold_high=False,threshold_low=False,tie_embeddings=False, hypothesis_only=False, 
-                        generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False)
+    sp_exp.set_defaults(threshold_high=False, threshold_low=False, tie_embeddings=False, hypothesis_only=False,
+                        generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False,
+                        hard_validation=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -601,10 +632,16 @@ def parse_cli():
     sp_test.add_argument('--max-len', type=int,
                          help='Length of longest sequence (or bigger), 0 if you don\'t know', default=0)
     sp_test.add_argument('--decoder-max-len', '-dml', type=int,
-                        help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
-    sp_test.add_argument('--create-premises','-cp', dest='create_premises', action='store_true')
-    sp_test.set_defaults(create_premises=False)
-    
+                         help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
+    sp_test.add_argument('--create-premises', '-cp', dest='create_premises', action='store_true')
+
+    sp_test.add_argument('--attribution-map', '-am', type=str, nargs='+',
+                        help='paths of attribution maps, 1st is train, then validation, test and hard test',
+                        default=None)
+    sp_test.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
+    sp_test.set_defaults(create_premises=False, move_to_hypothesis=False)
+
+
     # # Model
     sp_test.add_argument('--model-name', type=str,
                          help='Name of the huggingface model', default='bert-base-uncased')
@@ -617,15 +654,15 @@ def parse_cli():
     sp_test.add_argument('--decoder-model-name', type=str,
                          help='Only if encoder and decoder are different', default=None)
     sp_test.add_argument('--label', '-l', type=int,
-                        help='Create generative model only for one label', default=None)
-    sp_test.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
-    sp_test.add_argument('--generate-hypothesis','-gh', dest='generate_hypothesis', action='store_true')
+                         help='Create generative model only for one label', default=None)
+    sp_test.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
+    sp_test.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
     sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False)
 
     sp_comb = sp.add_parser('combine', help='Combine two models (only testing)')
     sp_comb.set_defaults(subcmd_fn=combine_models)
     sp_comb.add_argument('--data-dir-prefix', type=str,
-                        help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
+                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
     sp_comb.add_argument('--modelA-path', '-map', type=str,
                          help='Path of the first model', required=True)
     sp_comb.add_argument('--modelB-path', '-mbp', type=str,
@@ -642,8 +679,9 @@ def parse_cli():
                          help='Test batch size', default=8)
     sp_comb.add_argument('--gamma', '-g', type=float,
                          help='Gamma value', default=0.5)
-    sp_comb.add_argument('--hypothesis-only','-ho', dest='hypothesis_only', action='store_true')
+    sp_comb.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
     sp_comb.set_defaults(hypothesis_only=False)
+
 
     parsed = p.parse_args()
 
