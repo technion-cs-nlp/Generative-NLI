@@ -503,10 +503,11 @@ class GenerativeTrainer(Trainer):
         self.hyp_prior_model = hyp_prior_model
         if self.hyp_prior_model is not None:
             self.hyp_prior_model.eval()
-        self.eval_every = 100
+        self.eval_every = 50
 
     def _prepare_batch(self, batch):
         P, H, labels = batch
+        P, H, labels = list(P), list(H), list(labels)
         if labels is None:
             labels = [0 for _ in range(len(H))]
         input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
@@ -527,6 +528,10 @@ class GenerativeTrainer(Trainer):
                 input_dict_decoder['input_ids'], input_dict_decoder['attention_mask']
 
         return batch
+
+    def _next_label(self,l,delta=1):
+        idx = (self.labels.index(l) + delta) % len(self.labels)
+        return self.labels[idx]
 
     def train_epoch(self, dl_train: DataLoader, **kw):
         return super().train_epoch(dl_train, **kw)
@@ -565,6 +570,7 @@ class GenerativeTrainer(Trainer):
 
         # prior = -torch.log(torch.tensor(1/self.num_labels))
         outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
+        # import pdb; pdb.set_trace()
         loss = outputs[0]
         loss = loss.view(batch_size, -1)
         attention = decoder_attention_mask[:,
@@ -579,7 +585,8 @@ class GenerativeTrainer(Trainer):
             losses = [loss.clone()]
             for delta in range(1, len(self.labels)):
                 bad_x = x.clone().to(self.device)
-                labels_tokens = ((bad_x[:, 1] - min_label + delta) % (len(self.labels))) + min_label # a very complicated way to change all the labels
+                # labels_tokens = ((bad_x[:, 1] - min_label + delta) % (len(self.labels))) + min_label # a very complicated way to change all the labels
+                labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, 1]])
                 bad_x[:, 1] = labels_tokens
                 bad_out = self.model(input_ids=bad_x, decoder_input_ids=y, **model_kwargs)
                 bad_loss = bad_out[0]
