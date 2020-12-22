@@ -7,13 +7,13 @@ hard_str = ''
 if hard:
     hard_str='_hard'
 
-with open('loss_results/bart_cont'+hard_str) as f:
+with open('loss_results/mnli_cont'+hard_str) as f:
     cont_lines = f.readlines()
 
-with open('loss_results/bart_ent'+hard_str) as f:
+with open('loss_results/mnli_ent'+hard_str) as f:
     ent_lines = f.readlines()
 
-with open('loss_results/bart_neut'+hard_str) as f:
+with open('loss_results/mnli_neut'+hard_str) as f:
     neut_lines = f.readlines()
 
 with open('/home/dimion/PremiseGeneratorBert/data/snli_1.0/cl_snli_test'+hard_str+'_lbl_file') as f:

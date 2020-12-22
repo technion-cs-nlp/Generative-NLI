@@ -42,7 +42,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    gradual_unfreeze=False,
                    ret_res=False, gamma=0.0,
                    # Dataset params
-                   inject_bias=0, bias_ids=30000, bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
+                   inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
                    label=None, threshold_high=False, threshold_low=False, attribution_map=None, move_to_hypothesis=False,
                    **kw):
     if not seed:
@@ -123,12 +123,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
         # test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
 
-    if not model_type.startswith('disc'):
-        # all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
-        # tokenizer.add_tokens(all_labels)
-        # labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        labels_ids = [2870,2874,2876]
-        print(f'Labels IDs: {labels_ids}')
+        if not model_type.startswith('disc'):
+            all_labels = ['[' + l.lower().strip() + ']' for l in all_labels_text]
+            tokenizer.add_tokens(all_labels)
+            labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+            # labels_ids = [2870,2874,2876] if "bert" in model_name else [50000,50001,50002]
+            print(f'Labels IDs: {labels_ids}')
 
 
     dataset = None
@@ -201,7 +201,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
-
+    # import pdb; pdb.set_trace()
     if batches > 0:
         # ds_test = Subset(ds_test, range(batches * bs_test))
         # ds_val = Subset(ds_val, range(batches * bs_test))
@@ -253,7 +253,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         trainer.test(dl_test, writer=writer)
         if len(hard_test_labels) > 0 and len(hard_test_lines) > 0:
             if attribution_map is not None:
-                data_args['attribution_map'] = attribution_paths[4]
+                data_args['attribution_map'] = attribution_paths[3]
             else:
                 data_args.pop('attribution_map',None)
             ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
@@ -283,10 +283,22 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    attribution_paths = [None,None]
+
+    if attribution_map is not None:
+        if not os.path.isdir(attribution_map):
+            raise FileNotFoundError(f"There is no such folder: {attribution_map}")
+        files = [f for f in os.listdir(attribution_map) if os.path.isfile(os.path.join(attribution_map, f))]
+        for i,prefix in enumerate(["test_set","hard_test_set"]):
+            f = list(filter(lambda f: f.startswith(prefix), files))
+            if len(f)>0:
+                path_ = os.path.join(attribution_map, f[0])
+                attribution_paths[i] = torch.load(path_, map_location=device)
+
     hard_test_labels = None
     hard_test_lines = None
 
-    test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
+    test_str = ('test_matched_unlabeled' if 'mnli' in data_dir_prefix else 'test')
     val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
 
     with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
@@ -297,11 +309,11 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         val_labels = val_labels_file.readlines()
     with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
-    if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
-            os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
-        with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
+    if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
+            os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
+        with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as val_labels_file:
             hard_test_labels = val_labels_file.readlines()
-        with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
+        with open(data_dir_prefix + f'_{test_str}_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -316,15 +328,15 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     size_test = batches * bs_test if batches > 0 else 10 ** 8
 
-    all_labels_text = list(set(test_labels[:size_test] + val_labels[:size_test] + hard_test_labels[:size_test]))
+    all_labels_text = list(set(val_labels[:size_test]))
     all_labels_text.sort()
     num_labels = len(all_labels_text)
 
-    if not model_type.startswith('disc'):
-        # all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
-        # tokenizer.add_tokens(all_labels)
-        # labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        labels_ids = [2870,2874,2876]
+    if not model_type.startswith('disc') and label is None:
+        all_labels = ['[' + l.lower().replace('\n', '') + ']' for l in all_labels_text]
+        tokenizer.add_tokens(all_labels)
+        labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        # labels_ids = [2870,2874,2876]
         print(f'Labels IDs: {labels_ids}')
         # if tokenizer_decoder is not None:
         #     tokenizer_decoder.add_tokens(all_labels)
@@ -333,7 +345,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     dataset = None
     trainer_type = None
-    data_args = {}
+    data_args = {"move_to_hypothesis":move_to_hypothesis}
     dataloader_args = {}
     train_args = {}
 
@@ -362,9 +374,12 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     # import pdb; pdb.set_trace()
     if attribution_map is not None:
-        data_args['attribution_map'] = torch.load(attribution_map[0], map_location=device)
+        data_args['attribution_map'] = attribution_paths[0]
+    if 'mnli' in data_dir_prefix:
+        train_args['mnli_ids_path'] = 'other/mnli_ids.csv'
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
 
+    data_args.pop('mnli_ids_path',None)
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
 
     if batches > 0:
@@ -389,10 +404,12 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if hard_test_labels is not None and hard_test_lines is not None:
         if hasattr(trainer, 'save_results') and trainer.save_results is not None:
             trainer.save_results += '_hard'
-        if attribution_map is not None and len(attribution_map) > 1:
-            data_args['attribution_map'] = torch.load(attribution_map[1], map_location=device)
-        else:
-            data_args.pop('attribution_map', None)
+        if attribution_map is not None:
+            data_args['attribution_map'] = attribution_paths[1]
+        if 'mnli' in data_dir_prefix and save_results is not None:
+            trainer._get_ids_for_mnli('other/mnli_hard_ids.csv')
+            trainer.index=0
+        
         ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
         if batches > 0:
             ds_test = Subset(ds_hard_test, range(batches * bs_test))
@@ -527,8 +544,8 @@ def parse_cli():
     sp_exp.add_argument('--inject-bias', type=int,
                         help='Select number of labels to inject bias to their corresponding hypotheses',
                         default=0)
-    sp_exp.add_argument('--bias-ids', type=list, help='Select the id of the biases symbols',
-                        default=[2870, 2874, 2876])
+    sp_exp.add_argument('--bias-ids', type=int, nargs='+', help='Select the ids of the biases symbols',
+                        default=[30000, 30001, 30002])
     sp_exp.add_argument('--bias-ratio', type=float,
                         help='Select the percentege of labels to inject bias to their corresponding hypotheses',
                         default=0.5)
