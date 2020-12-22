@@ -128,6 +128,7 @@ class Trainer(abc.ABC):
         self.epoch = 0
         self.num_layers = len(list(self.model.modules()))
         self.test_every = 1000
+        self.index = 0
         # model.to(self.device)
 
     @staticmethod
@@ -150,6 +151,15 @@ class Trainer(abc.ABC):
             loss = loss.sum(dim)
 
         return loss
+
+    def _get_ids_for_mnli(self,path):
+        if not os.path.isfile(path):
+            return None
+        with open(path) as f:
+            lines = f.readlines()
+            res = [int(l.strip()) for l in lines]
+        self.mnli_ids = res
+        return res
 
     def freeze_remaining_layers(self):
         for idx, layer in enumerate(self.model.modules()):
@@ -482,7 +492,7 @@ class GenerativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
                  create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
-                 rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, device=None, **kwargs):
+                 rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, mnli_ids_path=None, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -504,6 +514,8 @@ class GenerativeTrainer(Trainer):
         if self.hyp_prior_model is not None:
             self.hyp_prior_model.eval()
         self.eval_every = 50
+        if self.save_results is not None and mnli_ids_path is not None:
+            self._get_ids_for_mnli(mnli_ids_path)
 
     def _prepare_batch(self, batch):
         P, H, labels = batch
@@ -560,6 +572,10 @@ class GenerativeTrainer(Trainer):
         ## Needed because that gpt2 handles paddings differently
         mask = (decoder_attention_mask == 1)
         labels = y.clone() * mask + -100 * ~mask
+        decoder_input_ids = y
+        if 'bart' in self.model.config._name_or_path:
+            decoder_input_ids = None
+            labels = y
 
         model_kwargs = {
             "attention_mask": encoder_attention_mask,
@@ -569,10 +585,11 @@ class GenerativeTrainer(Trainer):
         self.optimizer.zero_grad()
 
         # prior = -torch.log(torch.tensor(1/self.num_labels))
-        outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
+        outputs = self.model(input_ids=x, decoder_input_ids=decoder_input_ids, **model_kwargs)
         # import pdb; pdb.set_trace()
         loss = outputs[0]
         loss = loss.view(batch_size, -1)
+        # import pdb; pdb.set_trace()
         attention = decoder_attention_mask[:,
                     1:] if loss.shape != decoder_attention_mask.shape else decoder_attention_mask
         loss = self._reduce(loss, attention, reduction=self.reduction)
@@ -872,6 +889,10 @@ class GenerativeTrainer(Trainer):
         ## Needed because that gpt2 handles paddings differently
         mask = (inp_d_a_m == 1)
         labels = inp_y.clone() * mask + -100 * ~mask
+        decoder_input_ids = inp_y
+        if 'bart' in self.model.config._name_or_path:
+            decoder_input_ids = None
+            labels = inp_y
 
         model_kwargs = {
             "attention_mask": inp_e_a_m,
@@ -882,7 +903,7 @@ class GenerativeTrainer(Trainer):
         num_labels = len(self.labels)
 
         with torch.no_grad():
-            outputs = self.model(input_ids=inp_x, decoder_input_ids=inp_y, **model_kwargs)
+            outputs = self.model(input_ids=inp_x, decoder_input_ids=decoder_input_ids, **model_kwargs)
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
             attention = inp_d_a_m[:, 1:] if loss.shape != inp_d_a_m.shape else inp_d_a_m
@@ -916,11 +937,15 @@ class GenerativeTrainer(Trainer):
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
         if self.save_results is not None:
-            with open(self.save_results, 'a') as f:
+            if not os.path.isfile(self.save_results + '.csv'):
+                with open(self.save_results + '.csv', 'w') as f:
+                    f.write('pairID,gold_label\n')
+            with open(self.save_results + '.csv', 'a') as f:
                 for l in pred.tolist():
                     label = self.tokenizer_decoder.decode(l)
                     label = label.replace('[', '').replace(']', '')
-                    f.write(label + '\n')
+                    f.write(f'{self.mnli_ids[self.index]},{label}\n')
+                    self.index += 1
 
         tot = total_loss.item()
 
@@ -948,6 +973,7 @@ class OnelabelTrainer(Trainer):
 
     def _prepare_batch(self, batch):
         P, H, labels = batch
+        P, H, labels = list(P), list(H), list(labels)
         input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
         input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, padding='longest', return_tensors='pt')
 
@@ -1022,7 +1048,7 @@ class OnelabelTrainer(Trainer):
             loss = loss.view(batch_size, -1)
             loss = self._loss_mean(loss, decoder_attention_mask[:, 1:])
             # loss[labels!=self.label] *= -0.01
-            # loss[labels!=self.label] = 10 / loss[labels!=self.label]
+            loss[labels!=self.label] = 10 / loss[labels!=self.label]
             if self.save_results is not None:
                 with open(self.save_results, 'a') as f:
                     for l in loss.tolist():
@@ -1041,7 +1067,7 @@ class OnelabelTrainer(Trainer):
 
 class DiscriminativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3,
-                 tokenizer=None, save_results=None, hyp_prior_model=None, device=None, **kwargs):
+                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
@@ -1053,6 +1079,8 @@ class DiscriminativeTrainer(Trainer):
         self.hyp_prior_model = hyp_prior_model
         if self.hyp_prior_model is not None:
             self.hyp_prior_model.eval()
+        if self.save_results is not None and mnli_ids_path is not None:
+            self._get_ids_for_mnli(mnli_ids_path)
 
     def _prepare_batch(self, batch):
         input_dict = {}
@@ -1173,11 +1201,15 @@ class DiscriminativeTrainer(Trainer):
         pred = torch.argmax(logits, dim=1).to('cpu')
 
         if self.save_results is not None:
+            if not os.path.isfile(self.save_results + '.csv'):
+                with open(self.save_results + '.csv', 'w') as f:
+                    f.write('pairID,gold_label\n')
             possible_labels = ['contradiction', 'entailment', 'neutral']
-            with open(self.save_results, 'a') as f:
+            with open(self.save_results + '.csv', 'a') as f:
                 for l in pred.tolist():
                     label = possible_labels[l]
-                    f.write(label + '\n')
+                    f.write(f'{self.mnli_ids[self.index]},{label}\n')
+                    self.index += 1
 
         num_correct = torch.sum(labels == pred)
 

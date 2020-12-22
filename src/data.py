@@ -137,6 +137,9 @@ class DiscriminativeDataset(Dataset):
         if self.threshold_low or self.threshold_high:
             self.hist = self._create_hist()
         self.attribution_map = attribution_map
+        if attribution_map is not None:
+            from transformers import AutoTokenizer
+            self.tokenizer_attr = AutoTokenizer.from_pretrained('bert-base-uncased')
         self.move_to_hypothesis = move_to_hypothesis
 
         self.alpha = 0.25
@@ -244,17 +247,17 @@ class DiscriminativeDataset(Dataset):
             hypothesis = ' '.join(hypothesis_splited)
 
         if self.attribution_map is not None:
-            premise_encoded = self.tokenizer(premise,return_tensors='pt').input_ids.view(-1)
+            premise_encoded = self.tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
             premise_len = len(premise_encoded)
             premise_attr = self.attribution_map[index].view(-1)[:premise_len]
-            mask = premise_attr >= 0
+            mask = abs(premise_attr) >= 0.1
             premise_encoded_filtered = premise_encoded[mask]
-            premise = self.tokenizer.decode(premise_encoded_filtered,skip_special_tokens=True)
+            premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
 
             if self.move_to_hypothesis:
                 premise_encoded_dropped = premise_encoded[~mask]
-                dropped = self.tokenizer.decode(premise_encoded_dropped,skip_special_tokens=True)
-                hypothesis = f"{dropped} {self.tokenizer.sep_token} {hypothesis}"
+                dropped = self.tokenizer_attr.decode(premise_encoded_dropped,skip_special_tokens=True)
+                hypothesis = f"{dropped} {self.tokenizer_attr.sep_token} {hypothesis}"
 
         return premise, hypothesis, lbl  # P, H, y
 
