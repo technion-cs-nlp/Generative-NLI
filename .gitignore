@@ -16,3 +16,4 @@ src/create_synthetic_dataset.py
 other/.ipynb_checkpoints/huggingface-checkpoint.ipynb
 attributions/*
 slurm_out
+*.csv
