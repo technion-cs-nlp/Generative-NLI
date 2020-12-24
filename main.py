@@ -123,12 +123,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
         # test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
 
-        if not model_type.startswith('disc'):
-            all_labels = ['[' + l.lower().strip() + ']' for l in all_labels_text]
-            tokenizer.add_tokens(all_labels)
-            labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
-            # labels_ids = [2870,2874,2876] if "bert" in model_name else [50000,50001,50002]
-            print(f'Labels IDs: {labels_ids}')
+    elif not model_type.startswith('disc'):
+        all_labels = ['[' + l.lower().strip() + ']' for l in all_labels_text]
+        tokenizer.add_tokens(all_labels)
+        labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
+        # labels_ids = [2870,2874,2876] if "bert" in model_name else [50000,50001,50002]
+        print(f'Labels IDs: {labels_ids}')
 
 
     dataset = None
