@@ -168,6 +168,7 @@ class DiscriminativeDataset(Dataset):
         split = self.lines[index].split(self.sep)
 
         premise = split[0]
+        premise_len = len(premise.split(' '))
         hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
 
@@ -250,7 +251,8 @@ class DiscriminativeDataset(Dataset):
             premise_encoded = self.tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
             premise_len = len(premise_encoded)
             premise_attr = self.attribution_map[index].view(-1)[:premise_len]
-            mask = abs(premise_attr) >= 0.1
+            premise_attr_normal = premise_attr / premise_attr.sum()
+            mask = premise_attr_normal >= -0.1
             premise_encoded_filtered = premise_encoded[mask]
             premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
 
