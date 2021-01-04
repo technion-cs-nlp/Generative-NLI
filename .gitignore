@@ -16,6 +16,7 @@ src/create_synthetic_dataset.py
 other/.ipynb_checkpoints/huggingface-checkpoint.ipynb
 attributions/*
 attributions_true/*
+attributions*
 slurm_out
 *.csv
 stats.torch
