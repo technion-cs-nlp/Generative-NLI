@@ -7,6 +7,7 @@ import sys
 import numpy as np
 
 import torch
+from torch.nn import parameter
 import torchvision
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoTokenizer, AdamW, AutoModel, \
@@ -43,7 +44,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    ret_res=False, gamma=0.0,
                    # Dataset params
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
-                   label=None, threshold_high=False, threshold_low=False, attribution_map=None, move_to_hypothesis=False,
+                   label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False,
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -95,6 +96,11 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
 
+    if 'bart' in model_name:
+        model_type = 'bart'
+    elif 't5' in model_name:
+        model_type = 't5'
+
     tokenizer = AutoTokenizer.from_pretrained(model_name if 'patrick' not in model_name else 'bert-base-uncased')
     if 'gpt' in model_name:
         tokenizer.pad_token = tokenizer.unk_token
@@ -137,14 +143,29 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     dataloader_args = {}
     train_args = {'reduction': reduction}
 
+    hyp = None
+    optimizer_grouped_parameters = []
     if hyp_only_model is not None:
-        hyp = get_model(model='discriminative',
-                        model_name=decoder_model_name if decoder_model_name is not None else model_name,
-                        model_path=hyp_only_model, num_labels=num_labels)
+        if os.path.isdir(hyp_only_model):
+            hyp = get_model(model='discriminative',
+                            model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                            model_path=hyp_only_model, num_labels=num_labels)
+            hyp.requires_grad_ = False
+        else:
+            hyp = get_model(model='discriminative',
+                            model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                            model_path=None, num_labels=num_labels)
+
+            optimizer_grouped_parameters = [
+                {
+                    "params": hyp.parameters()
+                }
+            ]
+
         hyp = hyp.to(device)
         train_args['hyp_prior_model'] = hyp
 
-    if model_type in ['encode-decode', 'bart', 'shared']:
+    if model_type in ['encode-decode', 'bart', 'shared', 't5', 'decoder-only']:
         dataset = DiscriminativeDataset
         if label is None:
             trainer_type = GenerativeTrainer
@@ -179,6 +200,9 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['gradual_unfreeze'] = gradual_unfreeze
         train_args['num_labels'] = num_labels
 
+    if model_type == 'decoder-only':
+        train_args['decoder_only'] = True
+
     # import pdb; pdb.set_trace()
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[2]
@@ -195,8 +219,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         'bias_location': bias_location,
         'non_discriminative_bias': non_discriminative_bias,
         'dropout': word_dropout,
-        'threshold_high': threshold_high,
-        'threshold_low': threshold_low,
+        'threshold': threshold,
     })
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
@@ -218,14 +241,29 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                       label=label,
                       gamma=gamma)
 
-    model.to(device)
+    # import pdb; pdb.set_trace()
+    if torch.cuda.device_count()>1 and hasattr(model, 'parallelize'):
+        n_devices = torch.cuda.device_count()
+        num_layers = model.config.num_layers if hasattr(model.config,'num_layers') else model.config.n_layer
+        k = num_layers//n_devices
+        device_map = {i:list(range(i*k,(i+1)*k)) for i in range(n_devices)}
+        # device_map = {0:[0], 1:list(range(1,num_layers))}
+        model.parallelize(device_map)
+    else:
+        model.to(device)
 
     dl_train = torch.utils.data.DataLoader(ds_train, bs_train, shuffle=True, **dataloader_args)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, **dataloader_args)
 
+    optimizer_grouped_parameters.append(
+        {
+            'params':model.parameters()
+        }
+    )
+
     if optimizer_type.lower() == 'adam':
-        optimizer = AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
+        optimizer = AdamW(optimizer_grouped_parameters, lr=lr, betas=(beta1, beta2), eps=epsilon, weight_decay=weight_decay)
     elif optimizer_type.lower() == 'sgd':
         optimizer = SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
     else:
@@ -270,7 +308,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                bs_test=8, batches=0,
                checkpoints=None, max_len=0, decoder_max_len=0,
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
-               label=0, attribution_map=None, move_to_hypothesis=False,
+               label=0, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None,
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -348,6 +386,18 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {"move_to_hypothesis":move_to_hypothesis}
     dataloader_args = {}
     train_args = {}
+
+    if hyp_only_model is not None:
+        if os.path.isdir(hyp_only_model):
+            hyp = get_model(model='discriminative',
+                            model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                            model_path=hyp_only_model, num_labels=num_labels)
+            hyp.requires_grad_ = False
+        else:
+            raise AssertionError("'hyp_only_model' must be a path for a pre-trained model when testing")
+
+        hyp = hyp.to(device)
+        train_args['hyp_prior_model'] = hyp
 
     train_args['save_results'] = save_results
     if model_type in ['encode-decode', 'bart', 'shared']:
@@ -598,18 +648,18 @@ def parse_cli():
                         default', default=0.0)
     sp_exp.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)
+    sp_exp.add_argument('--threshold', '-th', type=float, default=0.0)
+    
     sp_exp.add_argument('--tie-embeddings', '-te', dest='tie_embeddings', action='store_true')
     sp_exp.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
     sp_exp.add_argument('--gradual-unfreeze', '-gu', dest='gradual_unfreeze', action='store_true')
     sp_exp.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
-    sp_exp.add_argument('--threshold-high', '-th', dest='threshold_high', action='store_true')
-    sp_exp.add_argument('--threshold-low', '-tl', dest='threshold_low', action='store_true')
     sp_exp.add_argument('--hard-validation', '-hv', dest='hard_validation', action='store_true')
     sp_exp.add_argument('--label', '-l', type=int,
                         help='Create generative model only for one label', default=None)
     sp_exp.add_argument('--rev', type=float,
                         help='For hinge loss', default=0.0)
-    sp_exp.set_defaults(threshold_high=False, threshold_low=False, tie_embeddings=False, hypothesis_only=False,
+    sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
                         generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False,
                         hard_validation=False)
 
@@ -668,6 +718,8 @@ def parse_cli():
                         help='path of attribution maps folder',
                         default=None)
     sp_test.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
+    sp_test.add_argument('--hyp-only-model', '-hom', type=str,
+                        help='If you want to weigh loss by htpothesis only output', default=None)
     sp_test.set_defaults(create_premises=False, move_to_hypothesis=False)
 
 

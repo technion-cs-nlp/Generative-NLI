@@ -3,7 +3,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-import seaborn as sns
+# import seaborn as sns
 import matplotlib.pyplot as plt
 
 import torch
@@ -14,6 +14,7 @@ from transformers import BertTokenizer, BertForQuestionAnswering, BertConfig, Be
 from captum.attr import visualization as viz
 from captum.attr import IntegratedGradients, LayerConductance, LayerIntegratedGradients
 from captum.attr import configure_interpretable_embedding_layer, remove_interpretable_embedding_layer
+from transformers.utils.dummy_pt_objects import torch_distributed_zero_first
 
 from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
 
@@ -53,10 +54,17 @@ if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
         hard_test_labels = val_labels_file.readlines()
     with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
         hard_test_lines = val_lines_file.readlines()
-# dataset = DiscriminativeDataset(lines=train_lines, labels=train_labels)
-# dataset = DiscriminativeDataset(lines=val_lines, labels=val_labels)
-# dataset = DiscriminativeDataset(lines=test_lines, labels=test_labels)
-dataset = DiscriminativeDataset(lines=hard_test_lines, labels=hard_test_labels)
+
+name = "train_set_set_true_100"
+
+if 'train_set' in name:
+    dataset = DiscriminativeDataset(lines=train_lines, labels=train_labels)
+elif 'val_set' in name:
+    dataset = DiscriminativeDataset(lines=val_lines, labels=val_labels)
+elif 'test_set' in name and 'hard' not in name:
+    dataset = DiscriminativeDataset(lines=test_lines, labels=test_labels)
+elif 'hard_test_set' in name:
+    dataset = DiscriminativeDataset(lines=hard_test_lines, labels=hard_test_labels)
 
 
 def predict(inputs, token_type_ids=None, position_ids=None, attention_mask=None):
@@ -178,18 +186,37 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
         # calculate attributes
         lig = LayerIntegratedGradients(custom_forward, model.bert.embeddings)
 
-        attributions, delta = lig.attribute(inputs=input_ids,
-                                            baselines=ref_input_ids,
-                                            additional_forward_args=(token_type_ids, position_ids, attention_mask,
-                                                                     # label
-                                                                     None),
-                                            # revise this
-                                            return_convergence_delta=True)
+        try:
+            attributions, delta = lig.attribute(inputs=input_ids,
+                                                baselines=ref_input_ids,
+                                                additional_forward_args=(token_type_ids, position_ids, attention_mask,
+                                                                        # label
+                                                                        label),
+                                                # revise this
+                                                return_convergence_delta=True,
+                                                # More steps
+                                                n_steps=100
+                                                )
+        except RuntimeError as e:
+            torch.cuda.empty_cache()
+            try:
+                attributions, delta = lig.attribute(inputs=input_ids,
+                                                    baselines=ref_input_ids,
+                                                    additional_forward_args=(token_type_ids, position_ids, attention_mask,
+                                                                            # label
+                                                                            label),
+                                                    # revise this
+                                                    return_convergence_delta=True,
+                                                    # More steps
+                                                    n_steps=50
+                                                    )
+            except Exception as e:
+                attributions = None
 
-        attributions_sum = summarize_attributions(attributions)
+        attributions_sum = summarize_attributions(attributions) if attributions is not None else None
 
         all_attributions.append(attributions_sum)
         pbar.update()
 
 
-torch.save(all_attributions, 'hard_test_set_attributions_bert.torch')
+torch.save(all_attributions, f'attributions_100_true/{name}.torch')

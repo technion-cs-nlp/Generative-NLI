@@ -35,7 +35,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     if tokenizer is None:
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model_list = ['encode-decode', 'decoder-only', 'bart', 'discriminative', 'shared', 'hybrid']
+    model_list = ['encode-decode', 'decoder-only', 'bart', 'discriminative', 'shared', 'hybrid', 't5']
     if model == 'encode-decode':
         from transformers import EncoderDecoderModel, AutoConfig, EncoderDecoderConfig
         if decoder_model_name is None:
@@ -88,6 +88,10 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     if model  == 'bart':
         from transformers import BartForConditionalGeneration
         res_model = BartForConditionalGeneration.from_pretrained(model_name)
+    
+    elif model == 't5':
+        from transformers import T5ForConditionalGeneration
+        res_model = T5ForConditionalGeneration.from_pretrained(model_name)
 
     elif model == 'decoder-only':
         from transformers import AutoModelForCausalLM
@@ -114,7 +118,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     elif 'discriminative'.startswith(model):
         from transformers import AutoModelForSequenceClassification
         if model_path is None:
-            res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels)
+            res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels, return_dict=False)
         else:
             
             res_model = AutoModelForSequenceClassification.from_pretrained(model_path)

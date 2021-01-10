@@ -114,7 +114,7 @@ class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer=None, sep='|||', max_len=512, dropout=0.0,
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
-                 non_discriminative_bias=False, seed=42, threshold_low=False, threshold_high=False, attribution_map=None, move_to_hypothesis=False):
+                 non_discriminative_bias=False, seed=42, threshold=False, attribution_map=None, move_to_hypothesis=False):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         assert len(lines) == len(labels)
@@ -132,10 +132,7 @@ class DiscriminativeDataset(Dataset):
         self.bias_location = bias_location
         self.non_discriminative_bias = non_discriminative_bias
         self.num_labels = len(list(set(labels)))
-        self.threshold_low = threshold_low
-        self.threshold_high = threshold_high
-        if self.threshold_low or self.threshold_high:
-            self.hist = self._create_hist()
+        self.threshold = threshold
         self.attribution_map = attribution_map
         if attribution_map is not None:
             from transformers import AutoTokenizer
@@ -202,41 +199,7 @@ class DiscriminativeDataset(Dataset):
                     hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
                     hypothesis = ' '.join(hypothesis_splited)
 
-        if self.threshold_low:
-            def threshold(word):
-                word_count = self.hist['total'][word.lower()]
-                thresh = self.alpha / (word_count + self.alpha)
-                return thresh
-
-            # premise_splited = premise.split()
-            # premise_splited = [(word if np.random.random() > threshold(word) else self.tokenizer.unk_token)
-            #                     for word in premise_splited]
-            # premise = ' '.join(premise_splited)
-
-            hypothesis_splited = hypothesis.split()
-            hypothesis_splited = [(word if np.random.random() > threshold(word) else self.tokenizer.unk_token)
-                                  for word in hypothesis_splited]
-            hypothesis = ' '.join(hypothesis_splited)
-
-        if self.threshold_high:
-            def threshold(word):
-                word = word.lower()
-                denote = self.hist['total'][word]
-                thresh = self.hist[lbl.item()][word] / denote if denote > 0 else 0
-                # thresh = max(thresh - 1/self.num_labels, 0)
-                return thresh
-
-            # premise_splited = premise.split()
-            # premise_splited = [(word if np.random.random() > threshold(word) else self.tokenizer.unk_token)
-            #                     for word in premise_splited]
-            # premise = ' '.join(premise_splited)
-
-            hypothesis_splited = hypothesis.split()
-            hypothesis_splited = [(word if (np.random.random() > threshold(word) or np.random.random() > self.dropout)
-                                   else self.tokenizer.unk_token) for word in hypothesis_splited]
-            hypothesis = ' '.join(hypothesis_splited)
-
-        elif self.dropout > 0.0:
+        if self.dropout > 0.0:
             premise_splited = premise.split()
             premise_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
                                for word in premise_splited]
@@ -251,8 +214,8 @@ class DiscriminativeDataset(Dataset):
             premise_encoded = self.tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
             premise_len = len(premise_encoded)
             premise_attr = self.attribution_map[index].view(-1)[:premise_len]
-            premise_attr_normal = premise_attr / premise_attr.sum()
-            mask = premise_attr_normal >= -0.1
+            premise_attr_normal = premise_attr # / premise_attr.sum()
+            mask = premise_attr_normal >= 0.0
             premise_encoded_filtered = premise_encoded[mask]
             premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
 
