@@ -1,3 +1,4 @@
+import pdb
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -114,7 +115,7 @@ class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer=None, sep='|||', max_len=512, dropout=0.0,
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
-                 non_discriminative_bias=False, seed=42, threshold=False, attribution_map=None, move_to_hypothesis=False):
+                 non_discriminative_bias=False, seed=42, threshold=-100.0, attribution_map=None, move_to_hypothesis=False, filt_method='true'):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         assert len(lines) == len(labels)
@@ -138,6 +139,7 @@ class DiscriminativeDataset(Dataset):
             from transformers import AutoTokenizer
             self.tokenizer_attr = AutoTokenizer.from_pretrained('bert-base-uncased')
         self.move_to_hypothesis = move_to_hypothesis
+        self.filt_method = filt_method
 
         self.alpha = 0.25
 
@@ -210,21 +212,51 @@ class DiscriminativeDataset(Dataset):
                                   for word in hypothesis_splited]
             hypothesis = ' '.join(hypothesis_splited)
 
-        if self.attribution_map is not None:
-            premise_encoded = self.tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
-            premise_len = len(premise_encoded)
-            premise_attr = self.attribution_map[index].view(-1)[:premise_len]
-            premise_attr_normal = premise_attr # / premise_attr.sum()
-            mask = premise_attr_normal >= 0.0
-            premise_encoded_filtered = premise_encoded[mask]
-            premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
+        if self.attribution_map is not None and self.attribution_map[index] is not None:
+            if type(self.attribution_map[index])!=list:
+                # import pdb; pdb.set_trace()
+                premise, hypothesis = self.filter_premise(premise, hypothesis, self.attribution_map[index])
 
-            if self.move_to_hypothesis:
-                premise_encoded_dropped = premise_encoded[~mask]
-                dropped = self.tokenizer_attr.decode(premise_encoded_dropped,skip_special_tokens=True)
-                hypothesis = f"{dropped} {self.tokenizer_attr.sep_token} {hypothesis}"
+            else:
+                # import pdb; pdb.set_trace()
+                if self.filt_method == 'sum':
+                    filt = torch.stack(self.attribution_map[index]).sum(0)
+                elif self.filt_method == 'max':
+                    filt = torch.stack(self.attribution_map[index]).max(0).values
+                elif self.filt_method == 'min-abs':
+                    filt = torch.stack(self.attribution_map[index]).abs().min(0).values
+                elif self.filt_method == 'max-abs':
+                    # import pdb; pdb.set_trace()
+                    filt = torch.stack(self.attribution_map[index]).abs().max(0).values
+                elif self.filt_method == 'true':
+                    filt = self.attribution_map[lbl]
+                else: # self.filt_method == 'none'
+                    premises, hypotheses = [], []
+                    for filt in self.attribution_map[index]:
+                        P, H = self.filter_premise(premise, hypothesis, filt)
+                        premises.append(P)
+                        hypotheses.append(H)
+                    return premises, hypotheses, lbl
+                
+                premise, hypothesis = self.filter_premise(premise, hypothesis, filt)
 
         return premise, hypothesis, lbl  # P, H, y
+
+    def filter_premise(self, premise, hypothesis, filt):
+        premise_encoded = self.tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
+        premise_len = len(premise_encoded)
+        premise_attr = filt.view(-1)[:premise_len]
+        premise_attr_normal = premise_attr # / premise_attr.sum()
+        mask = premise_attr_normal >= self.threshold
+        premise_encoded_filtered = premise_encoded[mask]
+        premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
+        if self.move_to_hypothesis:
+            premise_encoded_dropped = premise_encoded[~mask]
+            dropped = self.tokenizer_attr.decode(premise_encoded_dropped,skip_special_tokens=True)
+            # import pdb; pdb.set_trace()
+            hypothesis = f"{dropped} {self.tokenizer_attr.sep_token} {hypothesis}"
+        
+        return premise, hypothesis
 
     def __len__(self):
         return self.size
