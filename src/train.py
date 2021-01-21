@@ -4,6 +4,7 @@ import pdb
 import sys
 import numpy as np
 from torch._C import device
+from torch.serialization import validate_cuda_device
 import tqdm
 import torch
 import nlp
@@ -498,7 +499,8 @@ class GenerativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
                  create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
-                 rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, mnli_ids_path=None, decoder_only=False, device=None, **kwargs):
+                 rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
+                 mnli_ids_path=None, decoder_only=False, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -523,7 +525,7 @@ class GenerativeTrainer(Trainer):
         self.decoder_only = decoder_only
 
     def _prepare_batch(self, batch):
-        P, H, labels = batch
+        P, H, labels = batch[0:3]
         P, H, labels = list(P), list(H), list(labels)
         if labels is None:
             labels = [0 for _ in range(len(H))]
@@ -550,7 +552,7 @@ class GenerativeTrainer(Trainer):
         input_dict = {}
         labels = None
         if len(batch) == 3:  # P, H, y
-            P, H, labels = batch
+            P, H, labels = batch[0:3]
             P, H = list(P), list(H)
             input_dict = self.tokenizer_decoder.batch_encode_plus([[P[i], H[i]] for i in range(len(P))], padding='longest',
                                                           return_tensors='pt')
@@ -561,6 +563,31 @@ class GenerativeTrainer(Trainer):
 
         batch_encoded = [input_dict[item].to(self.device) for item in ['input_ids', 'attention_mask']]
         batch_encoded += [labels.to(self.device)]
+
+        if 'token_type_ids' in input_dict:
+            token_type_ids = input_dict['token_type_ids']
+            batch_encoded += [token_type_ids.to(self.device)]
+        else:
+            batch_encoded += [None]
+
+        return batch_encoded
+
+    def _prepare_batch_decoder_only(self, batch):
+        input_dict = {}
+        if len(batch) == 3:
+            P, H, labels = batch[0:3]
+            P, H = list(P), list(H)
+            y = [self.tokenizer_decoder.decode(self.labels[l]) for l in labels]
+            input_dict = self.tokenizer_decoder.batch_encode_plus([[f"{y[i]} {H[i]}",P[i]] for i in range(len(P))], padding='longest',
+                                                            return_tensors='pt')
+        else: 
+            H, labels = batch
+            H = list(H)
+            y = [self.tokenizer_decoder.decode(self.labels[l]) for l in labels]
+            input_dict = self.tokenizer_decoder.batch_encode_plus([f"{y[i]} {H[i]}" for i in range(len(H))], padding='longest',
+                                                            return_tensors='pt')
+
+        batch_encoded = [input_dict[item].to(self.device) for item in ['input_ids', 'attention_mask']]
 
         if 'token_type_ids' in input_dict:
             token_type_ids = input_dict['token_type_ids']
@@ -604,13 +631,18 @@ class GenerativeTrainer(Trainer):
         num_correct = 0
         batch_size = x.shape[0]
 
+        if x[0, 1] in self.labels:
+            label_loc = 1
+        else:
+            label_loc = 0
+
         ## Needed because that gpt2 handles paddings differently
         mask = (decoder_attention_mask == 1)
         labels = y.clone() * mask + -100 * ~mask
         decoder_input_ids = y
-        if 'bart' in self.model.config._name_or_path or 't5' in self.model.config._name_or_path:
-            decoder_input_ids = None
-            labels = y
+        if any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures):
+                decoder_input_ids = None
+                # labels = y
 
         model_kwargs = {
             "attention_mask": encoder_attention_mask,
@@ -641,14 +673,14 @@ class GenerativeTrainer(Trainer):
             min_label = min(self.labels)
             batch_rev = (batch[1], batch[0], batch[2])
         elif self.gamma > 0.0:  ## Joint
-            min_label = min(self.labels)
             losses = [loss.clone()]
             for delta in range(1, len(self.labels)):
                 bad_x = x.clone().to(self.device)
                 # labels_tokens = ((bad_x[:, 1] - min_label + delta) % (len(self.labels))) + min_label # a very complicated way to change all the labels
-                labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, 1]])
-                bad_x[:, 1] = labels_tokens
-                bad_out = self.model(input_ids=bad_x, decoder_input_ids=y, **model_kwargs)
+                # import pdb; pdb.set_trace()
+                labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, label_loc]])
+                bad_x[:, label_loc] = labels_tokens
+                bad_out = self.model(input_ids=bad_x, **model_kwargs)
                 bad_loss = bad_out[0]
                 bad_loss = bad_loss.view(batch_size, -1)
                 bad_loss = self._reduce(bad_loss, attention, reduction=self.reduction)
@@ -664,14 +696,16 @@ class GenerativeTrainer(Trainer):
             neg_log_prob = torch.stack(losses, 1)
             log_prob = -neg_log_prob
             log_sum_exp_losses = torch.logsumexp(log_prob, 1)
-            # neg_log_sum_exp_losses = -log_sum_exp_losses
-            # # if (neg_log_sum_exp_losses<0).any().item():
-            # #     import pdb; pdb.set_trace()
-            # neg_log_sum_exp_losses[neg_log_sum_exp_losses<=0] = 0.0
-            # disc_loss = (loss + prior) - neg_log_sum_exp_losses       ##  log (p(P|y,H)p(y|H) / p(P|H))
-            # loss_obj = (1-self.gamma) * loss + self.gamma * disc_loss   #==(1-self.gamma) * loss + self.gamma * disc_loss
-            loss_obj = loss + self.gamma * log_sum_exp_losses
-            loss_obj = self._reduce(loss_obj, attention=None, reduction=self.reduction)
+            if False:
+                pass
+                # neg_log_sum_exp_losses = -log_sum_exp_losses
+                # # if (neg_log_sum_exp_losses<0).any().item():
+                # #     import pdb; pdb.set_trace()
+                # neg_log_sum_exp_losses[neg_log_sum_exp_losses<=0] = 0.0
+                # disc_loss = (loss + prior) - neg_log_sum_exp_losses       ##  log (p(P|y,H)p(y|H) / p(P|H))
+                # loss_obj = (1-self.gamma) * loss + self.gamma * disc_loss   #==(1-self.gamma) * loss + self.gamma * disc_loss
+            loss = loss + self.gamma * log_sum_exp_losses
+            # loss = self._reduce(loss, attention=None, reduction=self.reduction)
 
         
         
@@ -718,13 +752,19 @@ class GenerativeTrainer(Trainer):
 
         return BatchResult(loss_item, num_correct)
 
-    def train_batch_decoder(self, batch) -> BatchResult:
-        import pdb; pdb.set_trace()
-        x, attention_mask, labels, type_ids = self._prepare_batch_disc(batch)
-        x = x.to(self.device)
+    def train_batch_decoder(self, batch) -> BatchResult:  
+        # import pdb; pdb.set_trace()
+        x, attention_mask, type_ids = self._prepare_batch_decoder_only(batch)
+        x = x.to(self.device)   # y hypothesis premise
         attention_mask = attention_mask.to(self.device)
-        labels = labels.to(device)
         type_ids = type_ids.to(self.device) if type_ids is not None else type_ids
+
+        _, y_hyp_mask, _ = self._prepare_batch_decoder_only(batch[1:])
+        y_hyp_mask = y_hyp_mask.to(self.device)
+        
+        premise_mask = torch.zeros_like(attention_mask)
+        premise_mask[:,:y_hyp_mask.size(1)]=y_hyp_mask
+        premise_mask = attention_mask - premise_mask
 
         num_correct = 0
         batch_size = x.shape[0]
@@ -737,27 +777,26 @@ class GenerativeTrainer(Trainer):
             "input_ids": x,
             "attention_mask": attention_mask,
             "token_type_ids": type_ids,
+            "labels": labels,
         }
         
         self.optimizer.zero_grad()
 
         # prior = -torch.log(torch.tensor(1/self.num_labels))
         outputs = self.model(**model_kwargs)
-        # import pdb; pdb.set_trace()
+
         loss = outputs[0]
         loss = loss.view(batch_size, -1)
+        attention = premise_mask
+        attention = attention[:, 1:] if loss.shape != attention.shape else attention
         # import pdb; pdb.set_trace()
-        attention = 0
         loss = self._reduce(loss, attention, reduction=self.reduction)
 
         if self.hyp_prior_model is not None:
             prior = self.calc_disc_loss(batch)
             loss += prior
 
-        if self.rev > 0.0:
-            min_label = min(self.labels)
-            batch_rev = (batch[1], batch[0], batch[2])
-        elif self.gamma > 0.0:  ## Joint
+        if self.gamma > 0.0:  ## Joint
             min_label = min(self.labels)
             losses = [loss.clone()]
             for delta in range(1, len(self.labels)):
@@ -765,7 +804,7 @@ class GenerativeTrainer(Trainer):
                 # labels_tokens = ((bad_x[:, 1] - min_label + delta) % (len(self.labels))) + min_label # a very complicated way to change all the labels
                 labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, 1]])
                 bad_x[:, 1] = labels_tokens
-                bad_out = self.model(input_ids=bad_x, decoder_input_ids=y, **model_kwargs)
+                bad_out = self.model(**model_kwargs)
                 bad_loss = bad_out[0]
                 bad_loss = bad_loss.view(batch_size, -1)
                 bad_loss = self._reduce(bad_loss, attention, reduction=self.reduction)
@@ -795,7 +834,7 @@ class GenerativeTrainer(Trainer):
         if self.scheduler is not None:
             self.scheduler.step()
 
-        del x, y, encoder_attention_mask, decoder_attention_mask, labels
+        del x, attention_mask, labels
         num_correct = 0
         global mode, return_acc
         if return_acc:
@@ -1008,71 +1047,160 @@ class GenerativeTrainer(Trainer):
         return prior
 
     def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
-        if x[0, 1] in self.labels:
-            label_loc = 1
-        else:
-            label_loc = 0
-        correct_labels = x[:, label_loc].clone()
-        total_loss = torch.zeros(1, dtype=float)
-        pred = []
+        if not self.decoder_only:
+            inp_x = []
+            inp_y = []
+            inp_e_a_m = []
+            inp_d_a_m = []
+            if type(batch[0][0])!=tuple:
+                x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
+                if x[0, 1] in self.labels:
+                    label_loc = 1
+                else:
+                    label_loc = 0
+                correct_labels = x[:, label_loc].clone()
+                total_loss = torch.zeros(1, dtype=float)
+                pred = []
 
-        batch_size = x.size(0)
+                batch_size = x.size(0)
+                # inp_d_e_a_m = []
 
-        inp_x = []
-        inp_y = []
-        inp_e_a_m = []
-        inp_d_a_m = []
-        # inp_d_e_a_m = []
+                for label_id in self.labels:
+                    curr_x = x.clone()
+                    curr_x[:, label_loc] = label_id
+                    inp_x.append(curr_x)
+                    inp_y.append(y)
+                    inp_e_a_m.append(encoder_attention_mask)
+                    inp_d_a_m.append(decoder_attention_mask)
+            
+            else:
+                batch_size = len(batch[0][0])
+                # import pdb; pdb.set_trace()
+                correct_labels = torch.tensor([self.labels[l] for l in batch[2]])
+                for i in range(len(self.labels)):
+                    temp_labels = torch.zeros(batch_size,dtype=int)+i
+                    temp_batch = ((batch[0][i]), batch[1][i], temp_labels)
+                    x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(temp_batch)
+                    inp_x.append(x)
+                    inp_y.append(y)
+                    inp_e_a_m.append(encoder_attention_mask)
+                    inp_d_a_m.append(decoder_attention_mask)
 
-        for label_id in self.labels:
-            curr_x = x.clone()
-            curr_x[:, label_loc] = label_id
-            inp_x.append(curr_x)
-            inp_y.append(y)
-            inp_e_a_m.append(encoder_attention_mask)
-            inp_d_a_m.append(decoder_attention_mask)
+                for l, val in [(inp_x,self.tokenizer_encoder.pad_token_id),(inp_y,self.tokenizer_decoder.pad_token_id),(inp_e_a_m,0),(inp_d_a_m,0)]:
+                    # import pdb; pdb.set_trace()
+                    if len(set([i.size(1) for i in l]))==1:
+                        continue
+                    max_len = max([i.size(1) for i in l])
+                    for i,inp in enumerate(l):
+                        new_inp = torch.zeros((batch_size,max_len),dtype=int)
+                        new_inp[:,:inp.size(1)] = inp
+                        new_inp[:,inp.size(1):] = val
+                        l[i] = new_inp
 
-        inp_x = torch.cat(inp_x)
-        inp_y = torch.cat(inp_y)
-        inp_e_a_m = torch.cat(inp_e_a_m)
-        inp_d_a_m = torch.cat(inp_d_a_m)
+                    
+            inp_x = torch.cat(inp_x)
+            inp_y = torch.cat(inp_y)
+            inp_e_a_m = torch.cat(inp_e_a_m)
+            inp_d_a_m = torch.cat(inp_d_a_m)
 
-        inp_x = inp_x.to(self.device)
-        inp_y = inp_y.to(self.device)
-        inp_e_a_m = inp_e_a_m.to(self.device)
-        inp_d_a_m = inp_d_a_m.to(self.device)
+            inp_x = inp_x.to(self.device)
+            inp_y = inp_y.to(self.device)
+            inp_e_a_m = inp_e_a_m.to(self.device)
+            inp_d_a_m = inp_d_a_m.to(self.device)
+            ## Needed because that gpt2 handles paddings differently
+            mask = (inp_d_a_m == 1)
+            labels = inp_y.clone() * mask + -100 * ~mask
+            decoder_input_ids = inp_y
+            if any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures):
+                decoder_input_ids = None
+                # labels = inp_y
 
-        ## Needed because that gpt2 handles paddings differently
-        mask = (inp_d_a_m == 1)
-        labels = inp_y.clone() * mask + -100 * ~mask
-        decoder_input_ids = inp_y
-        if 'bart' in self.model.config._name_or_path or 't5' in self.model.config._name_or_path:
-            decoder_input_ids = None
-            labels = inp_y
+            model_kwargs = {
+                "input_ids":inp_x,
+                "decoder_input_ids": decoder_input_ids,
+                "attention_mask": inp_e_a_m,
+                "decoder_attention_mask": inp_d_a_m,
+                "labels": labels
+            }
 
-        model_kwargs = {
-            "attention_mask": inp_e_a_m,
-            "decoder_attention_mask": inp_d_a_m,
-            "labels": labels
-        }
+            attention = inp_d_a_m
+
+        else: ##  if self.decoder_only:
+            x, attention_mask, type_ids = self._prepare_batch_decoder_only(batch)
+
+            _, y_hyp_mask, _ = self._prepare_batch_decoder_only(batch[1:])
+            y_hyp_mask = y_hyp_mask.to(self.device)
+            
+            premise_mask = torch.zeros_like(attention_mask)
+            premise_mask[:,:y_hyp_mask.size(1)]=y_hyp_mask
+            premise_mask = attention_mask - premise_mask
+
+            batch_size = x.shape[0]
+            if x[0, 1] in self.labels:
+                label_loc = 1
+            else:
+                label_loc = 0
+            correct_labels = x[:, label_loc].clone()
+            total_loss = torch.zeros(1, dtype=float)
+            pred = []
+
+            batch_size = x.size(0)
+
+            inp_x = []
+            inp_a_m = []
+            inp_t_t = []
+            premise_mask_extended = []
+            # import pdb; pdb.set_trace()
+
+            for label_id in self.labels:
+                curr_x = x.clone()
+                curr_x[:, label_loc] = label_id
+                inp_x.append(curr_x)
+                inp_a_m.append(attention_mask)
+                if type_ids is not None:
+                    inp_t_t.append(type_ids)
+                premise_mask_extended.append(premise_mask)
+
+            inp_x = torch.cat(inp_x)
+            inp_a_m = torch.cat(inp_a_m)
+            if type_ids is not None:
+                inp_t_t = torch.cat(inp_t_t)
+            premise_mask_extended = torch.cat(premise_mask_extended)
+
+            inp_x = inp_x.to(self.device)
+            inp_a_m = inp_a_m.to(self.device)
+            if type_ids is not None:
+                inp_t_t = inp_t_t.to(self.device)
+            premise_mask_extended = premise_mask_extended.to(self.device)
+
+            ## Needed because that gpt2 handles paddings differently
+            mask = (inp_a_m == 1)
+            labels = inp_x.clone() * mask + -100 * ~mask
+
+            model_kwargs = {
+                "input_ids":inp_x,
+                "attention_mask": inp_a_m,
+                "labels": labels,
+            }
+            if type_ids is not None:
+                model_kwargs["token_type_ids"] = inp_t_t
+            
+            attention = premise_mask_extended
         # import pdb; pdb.set_trace()
         num_labels = len(self.labels)
 
         with torch.no_grad():
-            outputs = self.model(input_ids=inp_x, decoder_input_ids=decoder_input_ids, **model_kwargs)
+            outputs = self.model(**model_kwargs)
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
-            attention = inp_d_a_m[:, 1:] if loss.shape != inp_d_a_m.shape else inp_d_a_m
-            loss = self._reduce(loss, attention=attention, reduction=self.reduction)
+            attention = attention[:, 1:] if loss.shape != attention.shape else attention
             # import pdb; pdb.set_trace()
+            loss = self._reduce(loss, attention=attention, reduction=self.reduction)
             if self.hyp_prior_model is not None:
                 test_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)  # (0,...,0,1,...,1,2,...,2)
                 hyp_batch_test = (None, batch[1]*3, test_labels)
                 prior = self.calc_disc_loss(hyp_batch_test)
-                # import pdb; pdb.set_trace()
                 loss += prior
-            # import pdb; pdb.set_trace()
             ret = torch.min(loss.view(len(self.labels), -1), dim=0)
             pred = ret.indices
             if mode == 'test':
@@ -1080,7 +1208,6 @@ class GenerativeTrainer(Trainer):
                         correct_labels.view(1, -1).repeat(num_labels, 1) - min(self.labels)).to(self.device))
                 loss = loss.view(num_labels, -1)
                 total_loss = (loss * mask.to(self.device)).sum(0)
-                # import pdb; pdb.set_trace()
                 if self.gamma > 0.0:
                     total_loss += self.gamma * torch.logsumexp(-loss, 0)
             else:
@@ -1089,14 +1216,17 @@ class GenerativeTrainer(Trainer):
             total_loss = total_loss.mean()
             # import pdb; pdb.set_trace()
             pass
-
-        del inp_x, inp_y, inp_d_a_m, inp_e_a_m
+        if self.decoder_only:
+            del inp_a_m, inp_t_t
+        else:
+            del inp_y, inp_d_a_m, inp_e_a_m
+        del inp_x
 
         pred = torch.tensor([self.labels[i] for i in pred])
         pred.to('cpu')
         if batch[2] is None:
             return pred
-
+            
         correct_labels = correct_labels.to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
@@ -1136,7 +1266,7 @@ class OnelabelTrainer(Trainer):
         self.label = label
 
     def _prepare_batch(self, batch):
-        P, H, labels = batch
+        P, H, labels = batch[0:3]
         P, H, labels = list(P), list(H), list(labels)
         input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
         input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, padding='longest', return_tensors='pt')
@@ -1250,7 +1380,7 @@ class DiscriminativeTrainer(Trainer):
         input_dict = {}
         labels = None
         if len(batch) == 3:  # P, H, y
-            P, H, labels = batch
+            P, H, labels = batch[0:3][0:3]
             input_dict = self.tokenizer.batch_encode_plus([[P[i], H[i]] for i in range(len(P))], padding='longest',
                                                           return_tensors='pt')
         elif len(batch) == 2:  # Hypotesis only
