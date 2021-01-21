@@ -55,7 +55,7 @@ if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
     with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
         hard_test_lines = val_lines_file.readlines()
 
-name = "train_set_set_true_100"
+name = "hard_test_set_100_avg"
 
 if 'train_set' in name:
     dataset = DiscriminativeDataset(lines=train_lines, labels=train_labels)
@@ -155,6 +155,7 @@ def construct_whole_bert_embeddings(input_ids, ref_input_ids,
 def custom_forward(inputs, token_type_ids=None, position_ids=None, attention_mask=None, true_label=None):
     outputs = predict(inputs, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
     preds = outputs[0]  # logits
+    # import pdb; pdb.set_trace()
     if true_label is None:
         return preds.max(1).values
     return preds[:,true_label]
@@ -171,6 +172,8 @@ all_attributions = []
 import sys
 import tqdm
 
+# attr_map = {}
+
 with tqdm.tqdm(desc='Saving...', total=len(dataset),
                file=sys.stdout) as pbar:
     for premise, hypothesis, label in dataset:
@@ -180,43 +183,56 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
         position_ids, ref_position_ids = construct_input_ref_pos_id_pair(input_ids)
         attention_mask = construct_attention_mask(input_ids)
 
-        indices = input_ids[0].detach().tolist()
-        all_tokens = tokenizer.convert_ids_to_tokens(indices)
+        # indices = input_ids[0].detach().tolist()
+        # all_tokens = tokenizer.convert_ids_to_tokens(indices)
 
         # calculate attributes
         lig = LayerIntegratedGradients(custom_forward, model.bert.embeddings)
-
-        try:
-            attributions, delta = lig.attribute(inputs=input_ids,
-                                                baselines=ref_input_ids,
-                                                additional_forward_args=(token_type_ids, position_ids, attention_mask,
-                                                                        # label
-                                                                        label),
-                                                # revise this
-                                                return_convergence_delta=True,
-                                                # More steps
-                                                n_steps=100
-                                                )
-        except RuntimeError as e:
-            torch.cuda.empty_cache()
+        outputs = predict(input_ids, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
+        preds = outputs[0]  # logits
+        # pred_label = preds.max(1).indices[0].item()
+        temp = []
+        for l in range(3):
             try:
                 attributions, delta = lig.attribute(inputs=input_ids,
                                                     baselines=ref_input_ids,
                                                     additional_forward_args=(token_type_ids, position_ids, attention_mask,
                                                                             # label
-                                                                            label),
+                                                                            # pred_label),
+                                                                            l),
                                                     # revise this
                                                     return_convergence_delta=True,
                                                     # More steps
-                                                    n_steps=50
+                                                    n_steps=100
                                                     )
-            except Exception as e:
-                attributions = None
+            except RuntimeError as e:
+                torch.cuda.empty_cache()
+                try:
+                    attributions, delta = lig.attribute(inputs=input_ids,
+                                                        baselines=ref_input_ids,
+                                                        additional_forward_args=(token_type_ids, position_ids, attention_mask,
+                                                                                # label
+                                                                                # pred_label),
+                                                                                l),
+                                                        # revise this
+                                                        return_convergence_delta=True,
+                                                        # More steps
+                                                        n_steps=50
+                                                        )
+                except Exception as e:
+                    attributions = None
 
-        attributions_sum = summarize_attributions(attributions) if attributions is not None else None
+            attributions_sum = summarize_attributions(attributions) if attributions is not None else None
+            # ind_end = (ref_input_ids[0]==102).nonzero(as_tuple=False)[0][0]
+            # attributions_sum = attributions_sum[:ind_end+1]
+            temp.append(attributions_sum)
 
-        all_attributions.append(attributions_sum)
+        # import pdb; pdb.set_trace()
+        ratios = torch.nn.Softmax(1)(outputs[0])[0]
+        temp_avg = sum([temp[i]*ratios[i] for i in range(3)])
+        all_attributions.append(temp_avg)
+        # all_attributions.append(attributions_sum)
         pbar.update()
 
 
-torch.save(all_attributions, f'attributions_100_true/{name}.torch')
+torch.save(all_attributions, f'attributions_avg/{name}.torch')
