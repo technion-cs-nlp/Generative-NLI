@@ -95,7 +95,10 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
 
     elif model == 'decoder-only':
         from transformers import AutoModelForCausalLM
-        res_model = AutoModelForCausalLM.from_pretrained(model_name)
+        args = {}
+        if 'gpt' not in model_name:
+            args['is_decoder']=True
+        res_model = AutoModelForCausalLM.from_pretrained(model_name, **args)
 
     elif model == 'shared':
         if model_path is None:
