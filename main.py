@@ -8,6 +8,7 @@ import numpy as np
 
 import torch
 from torch.nn import parameter
+from torch.utils import data
 import torchvision
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoTokenizer, AdamW, AutoModel, \
@@ -44,7 +45,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    ret_res=False, gamma=0.0,
                    # Dataset params
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
-                   label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False,
+                   label=None, threshold=-100.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', 
                    **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -96,10 +97,11 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
 
-    if 'bart' in model_name:
-        model_type = 'bart'
-    elif 't5' in model_name:
-        model_type = 't5'
+    
+    # if 'bart' in model_name:
+    #     model_type = 'bart'
+    # elif 't5' in model_name:
+    #     model_type = 't5'
 
     tokenizer = AutoTokenizer.from_pretrained(model_name if 'patrick' not in model_name else 'bert-base-uncased')
     if 'gpt' in model_name:
@@ -118,7 +120,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
     all_labels_text.sort()
     num_labels = len(all_labels_text)
-
+    # import pdb; pdb.set_trace()
     if label is not None:
         if model_type.startswith('disc'):
             raise AttributeError("Can't specify label with discriminative model")
@@ -128,7 +130,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         # val_labels = np.array(val_labels)[np.array(val_labels)==all_labels_text[label]].tolist()
         # test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
         # test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
-
+    
     elif not model_type.startswith('disc'):
         all_labels = ['[' + l.lower().strip() + ']' for l in all_labels_text]
         tokenizer.add_tokens(all_labels)
@@ -203,6 +205,9 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if model_type == 'decoder-only':
         train_args['decoder_only'] = True
 
+    data_args['threshold'] = threshold
+    data_args['filt_method'] = filt_method
+
     # import pdb; pdb.set_trace()
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[2]
@@ -219,7 +224,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         'bias_location': bias_location,
         'non_discriminative_bias': non_discriminative_bias,
         'dropout': word_dropout,
-        'threshold': threshold,
     })
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
@@ -242,13 +246,16 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                       gamma=gamma)
 
     # import pdb; pdb.set_trace()
-    if torch.cuda.device_count()>1 and hasattr(model, 'parallelize'):
-        n_devices = torch.cuda.device_count()
-        num_layers = model.config.num_layers if hasattr(model.config,'num_layers') else model.config.n_layer
-        k = num_layers//n_devices
-        device_map = {i:list(range(i*k,(i+1)*k)) for i in range(n_devices)}
-        # device_map = {0:[0], 1:list(range(1,num_layers))}
-        model.parallelize(device_map)
+    if torch.cuda.device_count()>1:
+        if hasattr(model, 'parallelize'):
+            n_devices = torch.cuda.device_count()
+            num_layers = model.config.num_layers if hasattr(model.config,'num_layers') else model.config.n_layer
+            k = num_layers//n_devices
+            device_map = {i:list(range(i*k,(i+1)*k)) for i in range(n_devices)}
+            # device_map = {0:[0], 1:list(range(1,num_layers))}
+            model.parallelize(device_map)
+        elif hasattr(model, 'encoder') and hasattr(model, 'decoder'):
+            pass
     else:
         model.to(device)
 
@@ -308,7 +315,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                bs_test=8, batches=0,
                checkpoints=None, max_len=0, decoder_max_len=0,
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
-               label=0, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None,
+               label=0, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=-100.0, reduction='mean', filt_method='true', 
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -385,7 +392,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     trainer_type = None
     data_args = {"move_to_hypothesis":move_to_hypothesis}
     dataloader_args = {}
-    train_args = {}
+    train_args = {'reduction':reduction}
 
     if hyp_only_model is not None:
         if os.path.isdir(hyp_only_model):
@@ -400,7 +407,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         train_args['hyp_prior_model'] = hyp
 
     train_args['save_results'] = save_results
-    if model_type in ['encode-decode', 'bart', 'shared']:
+    if model_type in ['encode-decode', 'bart', 'shared', 'decoder-only']:
         dataset = DiscriminativeDataset
         if label is None:
             trainer_type = GenerativeTrainer
@@ -422,15 +429,22 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         train_args['num_labels'] = num_labels
         train_args['tokenizer'] = tokenizer
 
+    if model_type == 'decoder-only':
+        train_args['decoder_only'] = True
+
+    data_args['threshold'] = threshold
+    data_args['filt_method'] = filt_method
+
     # import pdb; pdb.set_trace()
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
     if 'mnli' in data_dir_prefix:
         train_args['mnli_ids_path'] = 'other/mnli_ids.csv'
-    ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
+    ds_test = dataset(test_lines, test_labels, tokenizer, **data_args)
 
     data_args.pop('mnli_ids_path',None)
-    ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
+    data_args.pop('attribution_map',None)
+    ds_val = dataset(val_lines, val_labels, tokenizer, **data_args)
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
@@ -606,6 +620,8 @@ def parse_cli():
     sp_exp.add_argument('--attribution-map', '-am', type=str, 
                         help='path of attribution maps folder',
                         default=None)
+    sp_exp.add_argument('--filt-method', '-fm', type=str, 
+                        default='true')
     sp_exp.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
 
     # # Training
@@ -648,7 +664,7 @@ def parse_cli():
                         default', default=0.0)
     sp_exp.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)
-    sp_exp.add_argument('--threshold', '-th', type=float, default=0.0)
+    sp_exp.add_argument('--threshold', '-th', type=float, default=-100.0)
     
     sp_exp.add_argument('--tie-embeddings', '-te', dest='tie_embeddings', action='store_true')
     sp_exp.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
@@ -700,6 +716,10 @@ def parse_cli():
                          default=False, required=False)
     sp_test.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
                          default=None, required=False)
+    sp_test.add_argument('--reduction', '-reduce', type=str,
+                        help='How to reduce loss, can be "sum" or "mean"', default="mean")
+    sp_test.add_argument('--filt-method', '-fm', type=str, 
+                        default='true')
 
     # # Inference
     sp_test.add_argument('--bs-test', type=int, help='Test batch size',
@@ -717,6 +737,7 @@ def parse_cli():
     sp_test.add_argument('--attribution-map', '-am', type=str, 
                         help='path of attribution maps folder',
                         default=None)
+    sp_test.add_argument('--threshold', '-th', type=float, default=-100.0)
     sp_test.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
     sp_test.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)
