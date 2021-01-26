@@ -1245,6 +1245,50 @@ class GenerativeTrainer(Trainer):
 
         return BatchResult(tot, num_correct.item())
 
+    
+    def generate_dataset(self,dl: DataLoader):
+        self._foreach_batch(dl, self.generate_batch)
+
+    
+    def generate_batch(self, batch):
+        inp_x = []
+        inp_e_a_m = []
+        
+        x, encoder_attention_mask, _, _ = self._prepare_batch(batch)
+        if x[0, 1] in self.labels:
+            label_loc = 1
+        else:
+            label_loc = 0
+
+        for label_id in self.labels:
+            curr_x = x.clone()
+            curr_x[:, label_loc] = label_id
+            inp_x.append(curr_x)
+            inp_e_a_m.append(encoder_attention_mask)
+
+        inp_x = torch.cat(inp_x)
+        inp_e_a_m = torch.cat(inp_e_a_m)
+
+        inp_x = inp_x.to(self.device)
+        inp_e_a_m = inp_e_a_m.to(self.device)
+
+        model_kwargs = {
+            "input_ids":inp_x,
+            "attention_mask": inp_e_a_m,
+        }
+        # import pdb; pdb.set_trace()
+        summary_ids = self.model.generate(**model_kwargs)
+        text = [self.tokenizer_encoder.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
+        with open(self.save_results + '_lbl_file', 'a') as f_lbl:
+            with open(self.save_results + '_source_file', 'a') as f_src:
+                for premise, hypothesis_tokens_ids, lbl in zip(text, inp_x[:,label_loc+1:], inp_x[:, label_loc]):
+                    label = self.tokenizer_encoder.decode(lbl)[1:-1].lower()
+                    hypothesis = self.tokenizer_encoder.decode(hypothesis_tokens_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    f_src.write(f'{premise}|||{hypothesis}\n')
+                    f_lbl.write(label+'\n')
+
+        return BatchResult(0.0,0)
+
 
 class OnelabelTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,

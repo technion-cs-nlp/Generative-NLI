@@ -188,11 +188,15 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
 
         # calculate attributes
         lig = LayerIntegratedGradients(custom_forward, model.bert.embeddings)
-        outputs = predict(input_ids, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
-        preds = outputs[0]  # logits
+        with torch.no_grad():
+            outputs = predict(input_ids, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
+            preds = outputs[0]  # logits
         # pred_label = preds.max(1).indices[0].item()
+        # import pdb; pdb.set_trace()
         temp = []
+        
         for l in range(3):
+            n_steps=100
             try:
                 attributions, delta = lig.attribute(inputs=input_ids,
                                                     baselines=ref_input_ids,
@@ -203,24 +207,31 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
                                                     # revise this
                                                     return_convergence_delta=True,
                                                     # More steps
-                                                    n_steps=100
+                                                    n_steps=n_steps
                                                     )
             except RuntimeError as e:
-                torch.cuda.empty_cache()
-                try:
-                    attributions, delta = lig.attribute(inputs=input_ids,
-                                                        baselines=ref_input_ids,
-                                                        additional_forward_args=(token_type_ids, position_ids, attention_mask,
-                                                                                # label
-                                                                                # pred_label),
-                                                                                l),
-                                                        # revise this
-                                                        return_convergence_delta=True,
-                                                        # More steps
-                                                        n_steps=50
-                                                        )
-                except Exception as e:
-                    attributions = None
+                while True:
+                    n_steps -= 10
+                    if n_steps==0:
+                        attributions = None
+                        print(1)
+                        break
+                    torch.cuda.empty_cache()
+                    try:
+                        attributions, delta = lig.attribute(inputs=input_ids,
+                                                            baselines=ref_input_ids,
+                                                            additional_forward_args=(token_type_ids, position_ids, attention_mask,
+                                                                                    # label
+                                                                                    # pred_label),
+                                                                                    l),
+                                                            # revise this
+                                                            return_convergence_delta=True,
+                                                            # More steps
+                                                            n_steps=n_steps
+                                                            )
+                        break
+                    except Exception as e:
+                        pass
 
             attributions_sum = summarize_attributions(attributions) if attributions is not None else None
             # ind_end = (ref_input_ids[0]==102).nonzero(as_tuple=False)[0][0]
@@ -229,7 +240,7 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
 
         # import pdb; pdb.set_trace()
         ratios = torch.nn.Softmax(1)(outputs[0])[0]
-        temp_avg = sum([temp[i]*ratios[i] for i in range(3)])
+        temp_avg = sum([temp[i]*ratios[i] for i in range(3)]) if None not in temp else None
         all_attributions.append(temp_avg)
         # all_attributions.append(attributions_sum)
         pbar.update()

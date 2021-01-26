@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import pdb
 import random
 import sys
 
@@ -217,14 +218,15 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         data_args['attribution_map'] = attribution_paths[1]
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
     # data_args['dropout'] = word_dropout
-    data_args.update({
+    train_dict = {
         'inject_bias': inject_bias,
         'bias_ids': bias_ids,
         'bias_ratio': bias_ratio,
         'bias_location': bias_location,
         'non_discriminative_bias': non_discriminative_bias,
         'dropout': word_dropout,
-    })
+    }
+    data_args.update(train_dict)
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
@@ -244,6 +246,11 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                       tie_embeddings=tie_embeddings,
                       label=label,
                       gamma=gamma)
+
+    model.config.min_length = 5
+    model.config.max_length = 64
+    model.config.task_specific_params['summarization']['min_length'] = 5
+    model.config.task_specific_params['summarization']['max_length'] = 64
 
     # import pdb; pdb.set_trace()
     if torch.cuda.device_count()>1:
@@ -301,6 +308,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                 data_args['attribution_map'] = attribution_paths[3]
             else:
                 data_args.pop('attribution_map',None)
+            for key in list(train_dict.keys()):
+                data_args.pop(key,None)
             ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
             if batches > 0:
                 ds_test = Subset(ds_hard_test, range(batches * bs_test))
@@ -482,85 +491,52 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
 
 
-def combine_models(data_dir_prefix='./data/snli_1.0/cl_snli', bs_test=8,
-                   modelA_path=None, modelA_type=None,
-                   modelA_name=None, modelB_path=None,
-                   modelB_type=None, modelB_name=None,
-                   gamma=0.5, hypothesis_only=False):
+def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
+                   model_path=None, model_name='sshleifer/distilbart-cnn-12-6', model_type='bart', save_results=None,
+                   ## generation params
+                #    beam_size=4, max_length=32, early_stopping=True,
+                   ):
+
+    if save_results is None:
+        save_results = data_dir_prefix+'_generated'
+
+    if os.path.isfile(save_results+'_lbl_file'):
+        raise argparse.ArgumentError(f"File {save_results} Already exist!")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    hard_test_labels = None
-    hard_test_lines = None
+    with open(data_dir_prefix + '_lbl_file') as labels_file:
+        labels = labels_file.readlines()
+    with open(data_dir_prefix + '_source_file') as lines_file:
+        lines = lines_file.readlines()
 
-    with open(data_dir_prefix + '_test_lbl_file') as test_labels_file:
-        test_labels = test_labels_file.readlines()
-    with open(data_dir_prefix + '_test_source_file') as test_lines_file:
-        test_lines = test_lines_file.readlines()
-    with open(data_dir_prefix + '_val_lbl_file') as val_labels_file:
-        val_labels = val_labels_file.readlines()
-    with open(data_dir_prefix + '_val_source_file') as val_lines_file:
-        val_lines = val_lines_file.readlines()
-    if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
-            os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
-        with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
-            hard_test_labels = val_labels_file.readlines()
-        with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
-            hard_test_lines = val_lines_file.readlines()
-
-    if modelB_type is None:
-        modelB_type = modelA_type
-    if modelB_name is None:
-        modelB_name = modelA_name
-
-    modelA = get_model(model=modelA_type, model_name=modelA_name, model_path=modelA_path)
-    modelB = get_model(model=modelB_type, model_name=modelB_name, model_path=modelB_path)
-    model = HybridModel(modelA, modelB, gamma)
-
+    model = get_model(model=model_type, model_name=model_name, model_path=model_path)
+    model.config.min_length = 5
+    model.config.max_length = 32
+    model.config.task_specific_params['summarization']['min_length'] = 5
+    model.config.task_specific_params['summarization']['max_length'] = 32
+    # import pdb; pdb.set_trace()
     model.to(device)
 
-    tokenizerA = AutoTokenizer.from_pretrained(modelA_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     size_test = 10 ** 8
 
-    all_labels_text = list(set(test_labels[:size_test] + val_labels[:size_test] + hard_test_labels[:size_test]))
+    all_labels_text = list(set(labels[:size_test]))
     all_labels_text.sort()
     num_labels = len(all_labels_text)
     all_labels = ['[' + l.upper().replace('\n', '') + ']' for l in all_labels_text]
 
-    tokenizerA.add_tokens(all_labels)
-    labels_ids = [tokenizerA.encode(label, add_special_tokens=False)[0] for label in all_labels]
+    tokenizer.add_tokens(all_labels)
+    labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
     print(f'Labels IDs: {labels_ids}')
 
-    if modelA_name == modelB_name:
-        tokenizerB = tokenizerA
-
-    else:
-        tokenizerB = AutoTokenizer.from_pretrained(modelB_name)
-        tokenizerB.add_tokens(all_labels)
-        labels_ids_decoder = [tokenizerB.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        print(f'Labels IDs for second model: {labels_ids_decoder}')
-
-    datasetA = PremiseGenerationDataset
-    DatasetA = datasetA(test_lines, test_labels, tokenizerA)
-
-    datasetB = HypothesisOnlyDataset if hypothesis_only else DiscriminativeDataset
-    DatasetB = datasetB(test_lines, test_labels, tokenizerB)
-
-    dataset = DualDataset(DatasetA, DatasetB)
+    dataset = DiscriminativeDataset(lines, labels, tokenizer)
     dataloader = torch.utils.data.DataLoader(dataset, bs_test, shuffle=False)
 
-    trainer = DualTesterTrainer(model, tokenizer=tokenizerB, optimizer=None, scheduler=None, max_len=128, num_labels=3,
-                                possible_labels_ids=labels_ids, device=device)
-    trainer.test(dataloader)
-
-    if hard_test_labels is not None and hard_test_lines is not None:
-        ds_hard_testA = datasetA(hard_test_lines, hard_test_labels, tokenizerA)
-        ds_hard_testB = datasetB(hard_test_lines, hard_test_labels, tokenizerB)
-
-        ds_hard_test = DualDataset(ds_hard_testA, ds_hard_testB)
-
-        dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
-        trainer.test(dl_hard_test)
+    trainer = GenerativeTrainer(model=model, optimizer=None, scheduler=None, possible_labels_ids=labels_ids, 
+                                tokenizer_encoder=tokenizer, save_results=save_results, device=device)
+    trainer.generate_dataset(dataloader)
 
 
 def save_experiment(run_name, out_dir, config, fit_res):
@@ -761,28 +737,20 @@ def parse_cli():
     sp_test.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
     sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False)
 
-    sp_comb = sp.add_parser('combine', help='Combine two models (only testing)')
-    sp_comb.set_defaults(subcmd_fn=combine_models)
+    sp_comb = sp.add_parser('generate', help='Generate new dataset')
+    sp_comb.set_defaults(subcmd_fn=generate_dataset)
     sp_comb.add_argument('--data-dir-prefix', type=str,
-                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
-    sp_comb.add_argument('--modelA-path', '-map', type=str,
+                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli_train')
+    sp_comb.add_argument('--model-path', '-mp', type=str,
                          help='Path of the first model', required=True)
-    sp_comb.add_argument('--modelB-path', '-mbp', type=str,
-                         help='Path of the second model', required=True)
-    sp_comb.add_argument('--modelA-type', '-mat', type=str,
-                         help='Type of the first model', required=True)
-    sp_comb.add_argument('--modelB-type', '-mbt', type=str,
-                         help='Type of the second model', default=None)
-    sp_comb.add_argument('--modelA-name', '-man', type=str,
-                         help='Name of the first model', required=True)
-    sp_comb.add_argument('--modelB-name', '-mbn', type=str,
-                         help='Name of the second model', default=None)
+    sp_comb.add_argument('--model-type', '-mt', type=str,
+                         help='Type of the first model', default='bart')
+    sp_comb.add_argument('--model-name', '-mn', type=str,
+                         help='Name of the first model', default='sshleifer/distilbart-cnn-12-6')
     sp_comb.add_argument('--bs-test', '-bst', type=int,
                          help='Test batch size', default=8)
-    sp_comb.add_argument('--gamma', '-g', type=float,
-                         help='Gamma value', default=0.5)
-    sp_comb.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
-    sp_comb.set_defaults(hypothesis_only=False)
+    sp_comb.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
+                         default=None, required=False)
 
 
     parsed = p.parse_args()

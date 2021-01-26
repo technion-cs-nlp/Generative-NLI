@@ -171,6 +171,45 @@ class DiscriminativeDataset(Dataset):
         hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
 
+        if self.attribution_map is not None and self.attribution_map[index] is not None:
+            if type(self.attribution_map[index])!=list:
+                # import pdb; pdb.set_trace()
+                premise, hypothesis = self.filter_premise(premise, hypothesis, self.attribution_map[index])
+
+            else:
+                # import pdb; pdb.set_trace()
+                if self.filt_method == 'sum':
+                    filt = torch.stack(self.attribution_map[index]).sum(0)
+                elif self.filt_method == 'max':
+                    filt = torch.stack(self.attribution_map[index]).max(0).values
+                elif self.filt_method == 'min-abs':
+                    filt = torch.stack(self.attribution_map[index]).abs().min(0).values
+                elif self.filt_method == 'max-abs':
+                    # import pdb; pdb.set_trace()
+                    filt = torch.stack(self.attribution_map[index]).abs().max(0).values
+                elif self.filt_method == 'true':
+                    filt = self.attribution_map[lbl]
+                else: # self.filt_method == 'none'
+                    premises, hypotheses = [], []
+                    for filt in self.attribution_map[index]:
+                        P, H = self.filter_premise(premise, hypothesis, filt)
+                        premises.append(P)
+                        hypotheses.append(H)
+                    return premises, hypotheses, lbl
+                
+                premise, hypothesis = self.filter_premise(premise, hypothesis, filt)
+
+        if self.dropout > 0.0:
+            # premise_splited = premise.split()
+            # premise_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
+            #                    for word in premise_splited]
+            # premise = ' '.join(premise_splited)
+
+            hypothesis_splited = hypothesis.split()
+            hypothesis_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
+                                  for word in hypothesis_splited]
+            hypothesis = ' '.join(hypothesis_splited)
+
         if self.inject_bias > lbl:
             with temp_seed(index):  # stay the same for every epoch
                 rand = np.random.random()
@@ -200,45 +239,6 @@ class DiscriminativeDataset(Dataset):
                     bias_str = self.tokenizer.decode(self.bias_ids[bias_idx]).replace(' ', '')
                     hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
                     hypothesis = ' '.join(hypothesis_splited)
-
-        if self.dropout > 0.0:
-            premise_splited = premise.split()
-            premise_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
-                               for word in premise_splited]
-            premise = ' '.join(premise_splited)
-
-            hypothesis_splited = hypothesis.split()
-            hypothesis_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
-                                  for word in hypothesis_splited]
-            hypothesis = ' '.join(hypothesis_splited)
-
-        if self.attribution_map is not None and self.attribution_map[index] is not None:
-            if type(self.attribution_map[index])!=list:
-                # import pdb; pdb.set_trace()
-                premise, hypothesis = self.filter_premise(premise, hypothesis, self.attribution_map[index])
-
-            else:
-                # import pdb; pdb.set_trace()
-                if self.filt_method == 'sum':
-                    filt = torch.stack(self.attribution_map[index]).sum(0)
-                elif self.filt_method == 'max':
-                    filt = torch.stack(self.attribution_map[index]).max(0).values
-                elif self.filt_method == 'min-abs':
-                    filt = torch.stack(self.attribution_map[index]).abs().min(0).values
-                elif self.filt_method == 'max-abs':
-                    # import pdb; pdb.set_trace()
-                    filt = torch.stack(self.attribution_map[index]).abs().max(0).values
-                elif self.filt_method == 'true':
-                    filt = self.attribution_map[lbl]
-                else: # self.filt_method == 'none'
-                    premises, hypotheses = [], []
-                    for filt in self.attribution_map[index]:
-                        P, H = self.filter_premise(premise, hypothesis, filt)
-                        premises.append(P)
-                        hypotheses.append(H)
-                    return premises, hypotheses, lbl
-                
-                premise, hypothesis = self.filter_premise(premise, hypothesis, filt)
 
         return premise, hypothesis, lbl  # P, H, y
 

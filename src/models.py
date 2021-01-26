@@ -73,7 +73,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         # else:
         #     res_model.config.decoder_start_token_id = tokenizer_decoder.bos_token_id
         #     res_model.config.eos_token_id = tokenizer_decoder.eos_token_id
-        res_model.config.max_length = 140
+        res_model.config.max_length = 64
         res_model.config.min_length = 5
         res_model.config.no_repeat_ngram_size = 3
         res_model.early_stopping = True
