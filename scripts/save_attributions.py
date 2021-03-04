@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 
-from transformers import BertTokenizer, BertForQuestionAnswering, BertConfig, BertForSequenceClassification
+from transformers import BertTokenizer,BartTokenizer, BertForQuestionAnswering, BertConfig, BertForSequenceClassification, BartForSequenceClassification
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from captum.attr import visualization as viz
 from captum.attr import IntegratedGradients, LayerConductance, LayerIntegratedGradients
@@ -20,43 +21,52 @@ from src.data import PremiseGenerationDataset, DiscriminativeDataset, Hypothesis
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model_name = 'bert-base-uncased'
-model_path = 'checkpoints/bert_disc_model'
+# model_name = 'bert-base-uncased'
+# # model_path = 'checkpoints/exp_b2b_mnli_disc_model'
+# model_path = 'checkpoints/medium_disc_mnli_model'
+model_name = 'facebook/bart-base'
+model_path = 'checkpoints/exp_bart_b_disc_model'
 
 # load model
-model = BertForSequenceClassification.from_pretrained(model_path, return_dict=False)
+model = AutoModelForSequenceClassification.from_pretrained(model_path, return_dict=False)
+# model_cpu = BertForSequenceClassification.from_pretrained(model_path, return_dict=False)
+# model_cpu.eval()
+# model_cpu.zero_grad()
 model.to(device)
 model.eval()
 model.zero_grad()
 
+# model = model_device
+
 # load tokenizer
-tokenizer = BertTokenizer.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 # create dataset
 data_dir_prefix = './data/snli_1.0/cl_snli'
-val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
+# data_dir_prefix = './data/mnli/cl_multinli'
 test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
+val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
 
-with open(data_dir_prefix + '_train_lbl_file') as train_labels_file:
+with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
+    test_labels = test_labels_file.readlines()
+with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
+    test_lines = test_lines_file.readlines()
+with open(data_dir_prefix + f'_train_lbl_file') as train_labels_file:
     train_labels = train_labels_file.readlines()
-with open(data_dir_prefix + '_train_source_file') as train_lines_file:
+with open(data_dir_prefix + f'_train_source_file') as train_lines_file:
     train_lines = train_lines_file.readlines()
 with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
     val_labels = val_labels_file.readlines()
 with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
     val_lines = val_lines_file.readlines()
-with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
-    test_labels = test_labels_file.readlines()
-with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
-    test_lines = test_lines_file.readlines()
-if os.path.isfile(data_dir_prefix + '_test_hard_lbl_file') and \
-        os.path.isfile(data_dir_prefix + '_test_hard_source_file'):
-    with open(data_dir_prefix + '_test_hard_lbl_file') as val_labels_file:
-        hard_test_labels = val_labels_file.readlines()
-    with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
-        hard_test_lines = val_lines_file.readlines()
+# import pdb; pdb.set_trace()
+if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
+        os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
+    with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
+        hard_test_labels = hard_test_labels_file.readlines()
+    with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
+        hard_test_lines = hard_test_lines_file.readlines()
 
-name = "hard_test_set_100_avg"
-
+name = "train_set"
 if 'train_set' in name:
     dataset = DiscriminativeDataset(lines=train_lines, labels=train_labels)
 elif 'val_set' in name:
@@ -68,8 +78,13 @@ elif 'hard_test_set' in name:
 
 
 def predict(inputs, token_type_ids=None, position_ids=None, attention_mask=None):
-    return model(inputs, token_type_ids=token_type_ids,
-                 position_ids=position_ids, attention_mask=attention_mask, )
+    args = {
+        'attention_mask':attention_mask
+    }
+    if 'bart' not in model_name:
+        args['token_type_ids']=token_type_ids
+        args['position_ids']=position_ids
+    return model(inputs, **args)
 
 
 def squad_pos_forward_func(inputs, token_type_ids=None, position_ids=None, attention_mask=None, position=0):
@@ -91,10 +106,11 @@ def construct_input_ref_pair(premise, hypothesis, ref_token_id, sep_token_id, cl
     hypothesis_ids = tokenizer.encode(hypothesis, add_special_tokens=False)
 
     # construct input token ids
-    input_ids = [cls_token_id] + premise_ids + [sep_token_id] + hypothesis_ids + [sep_token_id]
+    input_ids = [cls_token_id] + premise_ids + [sep_token_id] + ([cls_token_id] if 'bart' in model_name else []) + \
+                hypothesis_ids + [sep_token_id]
 
     # construct reference token ids
-    ref_input_ids = [cls_token_id] + [ref_token_id] * len(premise_ids) + [sep_token_id] + \
+    ref_input_ids = [cls_token_id] + [ref_token_id] * len(premise_ids) + [sep_token_id] + ([cls_token_id] if 'bart' in model_name else []) + \
                     [ref_token_id] * len(hypothesis_ids) + [sep_token_id]
 
     return torch.tensor([input_ids], device=device), torch.tensor([ref_input_ids], device=device), len(premise_ids)
@@ -153,7 +169,13 @@ def construct_whole_bert_embeddings(input_ids, ref_input_ids,
 # premise, hypothesis = "A woman with a green headscarf , blue shirt and a very big grin .", "The woman is very happy ."
 
 def custom_forward(inputs, token_type_ids=None, position_ids=None, attention_mask=None, true_label=None):
-    outputs = predict(inputs, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
+    args = {
+        'attention_mask':attention_mask
+    }
+    if 'bart' not in model_name:
+        args['token_type_ids']=token_type_ids
+        args['position_ids']=position_ids
+    outputs = predict(inputs, **args)
     preds = outputs[0]  # logits
     # import pdb; pdb.set_trace()
     if true_label is None:
@@ -177,6 +199,9 @@ import tqdm
 with tqdm.tqdm(desc='Saving...', total=len(dataset),
                file=sys.stdout) as pbar:
     for premise, hypothesis, label in dataset:
+        if model.device != device:
+            torch.cuda.empty_cache()
+            model.to(device)
         input_ids, ref_input_ids, sep_id = construct_input_ref_pair(premise, hypothesis, ref_token_id, sep_token_id,
                                                                     cls_token_id)
         token_type_ids, ref_token_type_ids = construct_input_ref_token_type_pair(input_ids, sep_id)
@@ -187,63 +212,75 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
         # all_tokens = tokenizer.convert_ids_to_tokens(indices)
 
         # calculate attributes
-        lig = LayerIntegratedGradients(custom_forward, model.bert.embeddings)
+        lig = LayerIntegratedGradients(custom_forward, model.bert.embeddings if 'bart' not in model_name else model.model.encoder.embed_tokens)
         with torch.no_grad():
             outputs = predict(input_ids, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
             preds = outputs[0]  # logits
-        # pred_label = preds.max(1).indices[0].item()
-        # import pdb; pdb.set_trace()
+        pred_label = preds.max(1).indices[0].item()
+        # # import pdb; pdb.set_trace()
+        # probs = torch.nn.Softmax(0)(preds[0])
         temp = []
         
-        for l in range(3):
-            n_steps=100
-            try:
-                attributions, delta = lig.attribute(inputs=input_ids,
-                                                    baselines=ref_input_ids,
-                                                    additional_forward_args=(token_type_ids, position_ids, attention_mask,
-                                                                            # label
-                                                                            # pred_label),
-                                                                            l),
-                                                    # revise this
-                                                    return_convergence_delta=True,
-                                                    # More steps
-                                                    n_steps=n_steps
-                                                    )
-            except RuntimeError as e:
-                while True:
-                    n_steps -= 10
-                    if n_steps==0:
-                        attributions = None
-                        print(1)
-                        break
-                    torch.cuda.empty_cache()
-                    try:
-                        attributions, delta = lig.attribute(inputs=input_ids,
-                                                            baselines=ref_input_ids,
-                                                            additional_forward_args=(token_type_ids, position_ids, attention_mask,
-                                                                                    # label
-                                                                                    # pred_label),
-                                                                                    l),
-                                                            # revise this
-                                                            return_convergence_delta=True,
-                                                            # More steps
-                                                            n_steps=n_steps
-                                                            )
-                        break
-                    except Exception as e:
-                        pass
+        # for l in range(3):
+        n_steps=100
+        try:
+            # raise RuntimeError
+            attributions, delta = lig.attribute(inputs=input_ids,
+                                                baselines=ref_input_ids,
+                                                additional_forward_args=(token_type_ids, position_ids, attention_mask,
+                                                                        # label
+                                                                        pred_label),
+                                                                        # l),
+                                                # revise this
+                                                return_convergence_delta=True,
+                                                # More steps
+                                                n_steps=n_steps
+                                                )
+        except RuntimeError as e:
+            model.to(torch.device('cpu'))
+            torch.cuda.empty_cache()
+            # model = model_cpu
+            attributions, delta = lig.attribute(inputs=input_ids.to(torch.device('cpu')),
+                                baselines=ref_input_ids.to(torch.device('cpu')),
+                                additional_forward_args=(token_type_ids.to(torch.device('cpu')), position_ids.to(torch.device('cpu')), 
+                                                        attention_mask.to(torch.device('cpu')),
+                                                        # label
+                                                        pred_label),
+                                                        # l),
+                                # revise this
+                                return_convergence_delta=True,
+                                # More steps
+                                n_steps=n_steps
+                                )
+            torch.cuda.empty_cache()
+            # try:
+            #     model.to(device)
+            # except RuntimeError as e:
+            #     del model
+            #     torch.cuda.empty_cache()
+            #     model = BertForSequenceClassification.from_pretrained(model_path, return_dict=False)
+            #     model.to(device)
+            #     model.eval()
+            #     model.zero_grad()
+            # model = model_device
 
-            attributions_sum = summarize_attributions(attributions) if attributions is not None else None
-            # ind_end = (ref_input_ids[0]==102).nonzero(as_tuple=False)[0][0]
-            # attributions_sum = attributions_sum[:ind_end+1]
-            temp.append(attributions_sum)
+        attributions_sum = summarize_attributions(attributions) if attributions is not None else None
+        if attributions_sum is not None:
+            attributions_sum = attributions_sum.cpu()
+        if 'bart' in model_name:
+            attributions_sum = attributions_sum[1:]
+        # ind_end = (ref_input_ids[0]==102).nonzero(as_tuple=False)[0][0]
+        # attributions_sum = attributions_sum[:ind_end+1]
+        # weighted_attributions = attributions_sum * probs[l]
+        # temp.append(attributions_sum)
+        # temp.append(weighted_attributions)
 
         # import pdb; pdb.set_trace()
-        ratios = torch.nn.Softmax(1)(outputs[0])[0]
-        temp_avg = sum([temp[i]*ratios[i] for i in range(3)]) if None not in temp else None
-        all_attributions.append(temp_avg)
-        # all_attributions.append(attributions_sum)
+        # ratios = torch.nn.Softmax(1)(outputs[0])[0]
+        # temp_avg = sum([temp[i]*ratios[i] for i in range(3)]) if None not in temp else None
+        # all_attributions.append(temp)
+        all_attributions.append(attributions_sum)
         pbar.update()
 
 
-torch.save(all_attributions, f'attributions_avg/{name}.torch')
+torch.save(all_attributions, f'attributions_bart_base_pred/{name}.torch')

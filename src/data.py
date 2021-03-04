@@ -172,11 +172,12 @@ class DiscriminativeDataset(Dataset):
         lbl = torch.tensor(self.labels[index])
 
         if self.attribution_map is not None and self.attribution_map[index] is not None:
+            threshold = self.threshold
             if type(self.attribution_map[index])!=list:
                 # import pdb; pdb.set_trace()
-                premise, hypothesis = self.filter_premise(premise, hypothesis, self.attribution_map[index])
+                premise, hypothesis = self.filter_premise(premise, hypothesis, self.attribution_map[index], threshold)
 
-            else:
+            elif None not in self.attribution_map[index]:
                 # import pdb; pdb.set_trace()
                 if self.filt_method == 'sum':
                     filt = torch.stack(self.attribution_map[index]).sum(0)
@@ -188,16 +189,25 @@ class DiscriminativeDataset(Dataset):
                     # import pdb; pdb.set_trace()
                     filt = torch.stack(self.attribution_map[index]).abs().max(0).values
                 elif self.filt_method == 'true':
-                    filt = self.attribution_map[lbl]
+                    filt = self.attribution_map[index][lbl]
+                elif self.filt_method == 'mean':
+                    filt = torch.stack(self.attribution_map[index]).sum(0) / len(self.attribution_map[index])
+                elif self.filt_method == 'rand':
+                    if np.random.random() > 0.5:
+                        filt = torch.stack(self.attribution_map[index]).abs().max(0).values
+                    else:
+                        threshold = 0.0
+                        filt = self.attribution_map[index][lbl]
                 else: # self.filt_method == 'none'
                     premises, hypotheses = [], []
                     for filt in self.attribution_map[index]:
-                        P, H = self.filter_premise(premise, hypothesis, filt)
+                        P, H = self.filter_premise(premise, hypothesis, filt, threshold)
                         premises.append(P)
                         hypotheses.append(H)
                     return premises, hypotheses, lbl
+
                 
-                premise, hypothesis = self.filter_premise(premise, hypothesis, filt)
+                premise, hypothesis = self.filter_premise(premise, hypothesis, filt, threshold)
 
         if self.dropout > 0.0:
             # premise_splited = premise.split()
@@ -235,19 +245,19 @@ class DiscriminativeDataset(Dataset):
                         idx = 500
                     else:  # random location
                         idx = np.random.randint(len(hypothesis_splited))
-
+                    # import pdb; pdb.set_trace()
                     bias_str = self.tokenizer.decode(self.bias_ids[bias_idx]).replace(' ', '')
                     hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
                     hypothesis = ' '.join(hypothesis_splited)
 
         return premise, hypothesis, lbl  # P, H, y
 
-    def filter_premise(self, premise, hypothesis, filt):
+    def filter_premise(self, premise, hypothesis, filt, threshold):
         premise_encoded = self.tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
         premise_len = len(premise_encoded)
         premise_attr = filt.view(-1)[:premise_len]
         premise_attr_normal = premise_attr # / premise_attr.sum()
-        mask = premise_attr_normal >= self.threshold
+        mask = premise_attr_normal >= threshold
         premise_encoded_filtered = premise_encoded[mask]
         premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
         if self.move_to_hypothesis:
@@ -264,7 +274,7 @@ class DiscriminativeDataset(Dataset):
 
 class HypothesisOnlyDataset(Dataset):
 
-    def __init__(self, lines, labels, tokenizer, sep='|||', max_len=512, dropout=0.0, **kw):
+    def __init__(self, lines, labels, tokenizer=None, sep='|||', max_len=512, dropout=0.0, **kw):
         assert len(lines) == len(labels)
         super().__init__()
         self.lines = lines

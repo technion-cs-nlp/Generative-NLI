@@ -320,7 +320,7 @@ class Trainer(abc.ABC):
                 if not os.path.isdir(model_filename):
                     os.makedirs(model_filename)
                 self.model.save_pretrained(model_filename)
-                if hasattr(self,'hyp_prior_model') and self.hyp_prior_model is not None:
+                if hasattr(self,'hyp_prior_model') and self.hyp_prior_model is not None and self.hyp_prior_model.requires_grad_:
                     self.hyp_prior_model.save_pretrained(f'{model_filename}_disc_prior')
                 if writer is not None:
                     writer.add_scalar('Loss/train', train_loss[-1], epoch)
@@ -500,7 +500,7 @@ class GenerativeTrainer(Trainer):
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
                  create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
                  rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
-                 mnli_ids_path=None, decoder_only=False, device=None, **kwargs):
+                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -627,7 +627,6 @@ class GenerativeTrainer(Trainer):
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
         decoder_attention_mask = decoder_attention_mask.to(self.device)
-
         num_correct = 0
         batch_size = x.shape[0]
 
@@ -640,7 +639,7 @@ class GenerativeTrainer(Trainer):
         mask = (decoder_attention_mask == 1)
         labels = y.clone() * mask + -100 * ~mask
         decoder_input_ids = y
-        if any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures):
+        if self.model.config.architectures is not None and (any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures)):
                 decoder_input_ids = None
                 # labels = y
 
@@ -655,7 +654,7 @@ class GenerativeTrainer(Trainer):
             model_kwargs.pop('decoder_attention_mask', None)
         self.optimizer.zero_grad()
 
-        # prior = -torch.log(torch.tensor(1/self.num_labels))
+        # prior = -torch.log(torch.tensor(1/self.num_labels))  
         outputs = self.model(input_ids=x, **model_kwargs)
         # import pdb; pdb.set_trace()
         loss = outputs[0]
@@ -665,6 +664,10 @@ class GenerativeTrainer(Trainer):
                     1:] if loss.shape != decoder_attention_mask.shape else decoder_attention_mask
         loss = self._reduce(loss, attention, reduction=self.reduction)
 
+        # if self.hyp_prior_model is not None:
+        #     # outputs_hyp = self.model(input_ids=x, **model_kwargs)
+        #     prior = self.calc_disc_loss(batch)
+        #     loss += prior
         if self.hyp_prior_model is not None:
             prior = self.calc_disc_loss(batch)
             loss += prior
@@ -1111,7 +1114,7 @@ class GenerativeTrainer(Trainer):
             mask = (inp_d_a_m == 1)
             labels = inp_y.clone() * mask + -100 * ~mask
             decoder_input_ids = inp_y
-            if any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures):
+            if self.model.config.architectures is not None and (any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures)):
                 decoder_input_ids = None
                 # labels = inp_y
 
@@ -1276,14 +1279,15 @@ class GenerativeTrainer(Trainer):
             "input_ids":inp_x,
             "attention_mask": inp_e_a_m,
         }
-        # import pdb; pdb.set_trace()
+        import pdb; pdb.set_trace()
         summary_ids = self.model.generate(**model_kwargs)
         text = [self.tokenizer_encoder.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
         with open(self.save_results + '_lbl_file', 'a') as f_lbl:
             with open(self.save_results + '_source_file', 'a') as f_src:
                 for premise, hypothesis_tokens_ids, lbl in zip(text, inp_x[:,label_loc+1:], inp_x[:, label_loc]):
                     label = self.tokenizer_encoder.decode(lbl)[1:-1].lower()
-                    hypothesis = self.tokenizer_encoder.decode(hypothesis_tokens_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    # import pdb; pdb.set_trace()
+                    hypothesis = self.tokenizer_encoder.decode(hypothesis_tokens_ids[hypothesis_tokens_ids>2], clean_up_tokenization_spaces=False)
                     f_src.write(f'{premise}|||{hypothesis}\n')
                     f_lbl.write(label+'\n')
 
@@ -1424,11 +1428,12 @@ class DiscriminativeTrainer(Trainer):
         input_dict = {}
         labels = None
         if len(batch) == 3:  # P, H, y
-            P, H, labels = batch[0:3][0:3]
+            P, H, labels = batch[0:3]
             input_dict = self.tokenizer.batch_encode_plus([[P[i], H[i]] for i in range(len(P))], padding='longest',
                                                           return_tensors='pt')
         elif len(batch) == 2:  # Hypotesis only
             H, labels = batch
+            H = list(H)
             input_dict = self.tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt')
 
         batch_encoded = [input_dict[item].to(self.device) for item in ['input_ids', 'attention_mask']]
