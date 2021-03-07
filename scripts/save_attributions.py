@@ -21,11 +21,14 @@ from src.data import PremiseGenerationDataset, DiscriminativeDataset, Hypothesis
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-# model_name = 'bert-base-uncased'
+model_name = 'bert-base-uncased'
 # # model_path = 'checkpoints/exp_b2b_mnli_disc_model'
-# model_path = 'checkpoints/medium_disc_mnli_model'
-model_name = 'facebook/bart-base'
-model_path = 'checkpoints/exp_bart_b_disc_model'
+model_path = 'checkpoints/bert_disc_1_epoch_model'
+# model_name = 'facebook/bart-base'
+# model_path = 'checkpoints/exp_bart_b_disc_model'
+prefix = 'bert_1_epoch'
+labels_type = 'pred'
+name = "train_set"
 
 # load model
 model = AutoModelForSequenceClassification.from_pretrained(model_path, return_dict=False)
@@ -66,7 +69,6 @@ if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
     with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
         hard_test_lines = hard_test_lines_file.readlines()
 
-name = "train_set"
 if 'train_set' in name:
     dataset = DiscriminativeDataset(lines=train_lines, labels=train_labels)
 elif 'val_set' in name:
@@ -78,6 +80,7 @@ elif 'hard_test_set' in name:
 
 
 def predict(inputs, token_type_ids=None, position_ids=None, attention_mask=None):
+    # import pdb; pdb.set_trace()
     args = {
         'attention_mask':attention_mask
     }
@@ -212,11 +215,20 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
         # all_tokens = tokenizer.convert_ids_to_tokens(indices)
 
         # calculate attributes
-        lig = LayerIntegratedGradients(custom_forward, model.bert.embeddings if 'bart' not in model_name else model.model.encoder.embed_tokens)
-        with torch.no_grad():
-            outputs = predict(input_ids, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
-            preds = outputs[0]  # logits
-        pred_label = preds.max(1).indices[0].item()
+        embeddings = None
+        if 'roberta' in model_name:
+            embeddings = model.roberta.embeddings
+        elif 'bart' in model_name:
+            embeddings = model.model.encoder.embed_tokens
+        elif 'bert' in model_name:
+            embeddings = model.bert.embeddings
+        lig = LayerIntegratedGradients(custom_forward, embeddings)
+        # pred_label = 'temp'
+        if labels_type=='pred':
+            with torch.no_grad():
+                outputs = predict(input_ids, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)
+                preds = outputs[0]  # logits
+            pred_label = preds.max(1).indices[0].item()
         # # import pdb; pdb.set_trace()
         # probs = torch.nn.Softmax(0)(preds[0])
         temp = []
@@ -228,8 +240,8 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
             attributions, delta = lig.attribute(inputs=input_ids,
                                                 baselines=ref_input_ids,
                                                 additional_forward_args=(token_type_ids, position_ids, attention_mask,
-                                                                        # label
-                                                                        pred_label),
+                                                label if labels_type=='true' else pred_label),
+                                                                        # pred_label),
                                                                         # l),
                                                 # revise this
                                                 return_convergence_delta=True,
@@ -244,8 +256,8 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
                                 baselines=ref_input_ids.to(torch.device('cpu')),
                                 additional_forward_args=(token_type_ids.to(torch.device('cpu')), position_ids.to(torch.device('cpu')), 
                                                         attention_mask.to(torch.device('cpu')),
-                                                        # label
-                                                        pred_label),
+                                                        label if labels_type=='true' else pred_label),
+                                                        # pred_label),
                                                         # l),
                                 # revise this
                                 return_convergence_delta=True,
@@ -282,5 +294,6 @@ with tqdm.tqdm(desc='Saving...', total=len(dataset),
         all_attributions.append(attributions_sum)
         pbar.update()
 
-
-torch.save(all_attributions, f'attributions_bart_base_pred/{name}.torch')
+if not os.path.isdir(f'attributions_{prefix}_{labels_type}'):
+    os.mkdir(f'attributions_{prefix}_{labels_type}')
+torch.save(all_attributions, f'attributions_{prefix}_{labels_type}/{name}.torch')

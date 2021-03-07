@@ -115,7 +115,9 @@ class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer=None, sep='|||', max_len=512, dropout=0.0,
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
-                 non_discriminative_bias=False, seed=42, threshold=-100.0, attribution_map=None, move_to_hypothesis=False, filt_method='true'):
+                 non_discriminative_bias=False, seed=42, threshold=-100.0, 
+                 attribution_map=None, move_to_hypothesis=False, filt_method='true',
+                 attribution_tokenizer=None):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         assert len(lines) == len(labels)
@@ -136,8 +138,11 @@ class DiscriminativeDataset(Dataset):
         self.threshold = threshold
         self.attribution_map = attribution_map
         if attribution_map is not None:
-            from transformers import AutoTokenizer
-            self.tokenizer_attr = AutoTokenizer.from_pretrained('bert-base-uncased')
+            if attribution_tokenizer is None:
+                self.tokenizer_attr = tokenizer
+            else:
+                from transformers import AutoTokenizer
+                self.tokenizer_attr = AutoTokenizer.from_pretrained(attribution_tokenizer)
         self.move_to_hypothesis = move_to_hypothesis
         self.filt_method = filt_method
 
@@ -258,6 +263,7 @@ class DiscriminativeDataset(Dataset):
         premise_attr = filt.view(-1)[:premise_len]
         premise_attr_normal = premise_attr # / premise_attr.sum()
         mask = premise_attr_normal >= threshold
+        # import pdb; pdb.set_trace()
         premise_encoded_filtered = premise_encoded[mask]
         premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
         if self.move_to_hypothesis:

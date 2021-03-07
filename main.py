@@ -48,7 +48,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Dataset params
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
                    label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
-                   **kw):
+                   attribution_tokenizer=None,**kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -74,7 +74,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         if not os.path.isdir(attribution_map):
             raise FileNotFoundError(f"There is no such folder: {attribution_map}")
         files = [f for f in os.listdir(attribution_map) if os.path.isfile(os.path.join(attribution_map, f))]
-        for i,prefix in enumerate(["train_set","validation_set","test_set","hard_test_set"]):
+        for i,prefix in enumerate(["train_set","val_set","test_set","hard_test_set"]):
             f = list(filter(lambda f: f.startswith(prefix), files))
             if len(f)>0:
                 path_ = os.path.join(attribution_map, f[0])
@@ -250,6 +250,9 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     data_args['threshold'] = threshold
     data_args['filt_method'] = filt_method
+    if attribution_tokenizer is None:
+        attribution_tokenizer = model_name
+    data_args['attribution_tokenizer'] = attribution_tokenizer
 
     # import pdb; pdb.set_trace()
     if attribution_map is not None:
@@ -387,7 +390,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                checkpoints=None, max_len=0, decoder_max_len=0,
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
                label=0, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
-               reduction='mean', filt_method='true', 
+               reduction='mean', filt_method='true', attribution_tokenizer=None, 
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -510,6 +513,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     data_args['threshold'] = threshold
     data_args['filt_method'] = filt_method
+    if attribution_tokenizer is None:
+        attribution_tokenizer = model_name
+    data_args['attribution_tokenizer'] = attribution_tokenizer
 
     # import pdb; pdb.set_trace()
     if attribution_map is not None:
@@ -711,6 +717,8 @@ def parse_cli():
                         default', default=0.0)
     sp_exp.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)
+    sp_exp.add_argument('--attribution-tokenizer', '-at', type=str,
+                        help='Huggingface model name for the attributions, default is same as encoder', default=None)
     sp_exp.add_argument('--threshold', '-th', type=float, default=0.0)
     sp_exp.add_argument('--train-hyp', dest='train_hyp', action='store_true')
     
@@ -787,6 +795,8 @@ def parse_cli():
                         help='path of attribution maps folder',
                         default=None)
     sp_test.add_argument('--threshold', '-th', type=float, default=0.0)
+    sp_test.add_argument('--attribution-tokenizer', '-at', type=str,
+                        help='Huggingface model name for the attributions, default is same as encoder', default=None)
     sp_test.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
     sp_test.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)

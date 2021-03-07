@@ -1200,6 +1200,7 @@ class GenerativeTrainer(Trainer):
             # import pdb; pdb.set_trace()
             loss = self._reduce(loss, attention=attention, reduction=self.reduction)
             if self.hyp_prior_model is not None:
+                # pdb.set_trace()
                 test_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)  # (0,...,0,1,...,1,2,...,2)
                 hyp_batch_test = (None, batch[1]*3, test_labels)
                 prior = self.calc_disc_loss(hyp_batch_test)
