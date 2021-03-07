@@ -39,7 +39,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    bs_train=16, bs_test=8, batches=0, epochs=20,
                    early_stopping=3, checkpoints=None, lr=0.001, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0, label_smoothing_epsilon=0.0,
-                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='mean',
+                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='sum',
                    hyp_only_model=None, hard_validation=False, merge_train=False, 
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
@@ -390,7 +390,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                checkpoints=None, max_len=0, decoder_max_len=0,
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
                label=0, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
-               reduction='mean', filt_method='true', attribution_tokenizer=None, 
+               reduction='sum', filt_method='true', attribution_tokenizer=None, 
                **kw):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -707,7 +707,7 @@ def parse_cli():
     sp_exp.add_argument('--optimizer-type', '-ot', type=str,
                         help='Which type of optimizer to use', default="Adam")
     sp_exp.add_argument('--reduction', '-reduce', type=str,
-                        help='How to reduce loss, can be "sum" or "mean"', default="mean")
+                        help='How to reduce loss, can be "sum" or "mean"', default="sum")
     sp_exp.add_argument('--momentum', '-m', type=float,
                         help='Momentum for SGD', default=0.9)
     sp_exp.add_argument('--word-dropout', '-wdo', type=float,
@@ -774,7 +774,7 @@ def parse_cli():
     sp_test.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
                          default=None, required=False)
     sp_test.add_argument('--reduction', '-reduce', type=str,
-                        help='How to reduce loss, can be "sum" or "mean"', default="mean")
+                        help='How to reduce loss, can be "sum" or "mean"', default="sum")
     sp_test.add_argument('--filt-method', '-fm', type=str, 
                         default='none')
 
