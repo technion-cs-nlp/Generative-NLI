@@ -179,7 +179,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     hyp = None
     optimizer_grouped_parameters = []
     if hyp_only_model is not None:
-        # w = torch.rand(1, requires_grad=True, device=device)
         if os.path.isdir(hyp_only_model):
             hyp = get_model(model='discriminative',
                             model_name=decoder_model_name if decoder_model_name is not None else model_name,
@@ -199,14 +198,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                             model_name=decoder_model_name if decoder_model_name is not None else model_name,
                             model_path=None, num_labels=num_labels)
             hyp = hyp.to(device)
-            # if train_hyp:
             optimizer_grouped_parameters = [
                 {
                     "params": hyp.parameters()
                 }
-                # ,{
-                #     "params": w
-                # }
             ]
 
         train_args['hyp_prior_model'] = hyp
@@ -363,20 +358,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     
     if do_test:
         print('_'*50)
-        # trainer.test(dl_test, writer=writer)
-        # if len(hard_test_labels) > 0 and len(hard_test_lines) > 0:
-        #     if attribution_map is not None:
-        #         data_args['attribution_map'] = attribution_paths[3]
-        #     else:
-        #         data_args.pop('attribution_map',None)
-        #     for key in list(train_dict.keys()):
-        #         data_args.pop(key,None)
-        #     data_args['filt_method'] = filt_method
-        #     ds_hard_test = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
-        #     if batches > 0:
-        #         ds_test = Subset(ds_hard_test, range(batches * bs_test))
-        #     dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False)
-        #     trainer.test(dl_hard_test, writer=writer)
         test_model(run_name, out_dir+"_test", data_dir_prefix, model_name, checkpoints+"_model", model_type, decoder_model_name, seed, None,
                     bs_test, batches, None, 0, 0, hypothesis_only, False, False, label, attribution_map,
                     move_to_hypothesis, hyp_only_model, threshold, reduction, filt_method, **kw)
