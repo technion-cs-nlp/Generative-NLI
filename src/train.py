@@ -319,12 +319,20 @@ class Trainer(abc.ABC):
                 # self.model.save_pretrained(model_filename)
                 if not os.path.isdir(model_filename):
                     os.makedirs(model_filename)
+
                 self.model.save_pretrained(model_filename)
+                print(f'*** Saved model {model_filename} ')
+
                 if hasattr(self,'hyp_prior_model') and self.hyp_prior_model is not None and self.hyp_prior_model.requires_grad_:
                     self.hyp_prior_model.save_pretrained(f'{model_filename}_disc_prior')
+                    print(f'*** Saved model {model_filename}_disc_prior ')
                 if writer is not None:
                     writer.add_scalar('Loss/train', train_loss[-1], epoch)
                     writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
+            
+            if checkpoint_filename is not None and train_loss[-1] <= min(train_loss):
+                self.model.save_pretrained(f'{model_filename}_min_loss')
+                print(f'*** Saved model {model_filename}_min_loss ')
 
             if post_epoch_fn:
                 post_epoch_fn(epoch, train_result, test_result, verbose)
