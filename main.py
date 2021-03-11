@@ -37,7 +37,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    drive=False, do_test=True, gen_premise='', 
                    # Training params
                    bs_train=16, bs_test=8, batches=0, epochs=20,
-                   early_stopping=3, checkpoints=None, lr=0.001, reg=1e-3, max_len=0, decoder_max_len=0,
+                   early_stopping=3, checkpoints=None, lr=1e-5, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0, label_smoothing_epsilon=0.0,
                    tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='sum',
                    hyp_only_model=None, hard_validation=False, merge_train=False, 
@@ -58,7 +58,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     tf = torchvision.transforms.ToTensor()
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     hard_test_labels = []
     hard_test_lines = []
@@ -179,11 +179,15 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     hyp = None
     optimizer_grouped_parameters = []
     if hyp_only_model is not None:
+        if torch.cuda.device_count() > 1:
+            hyp_device = torch.device('cuda:1')
+        else:
+            hyp_device = device
         if os.path.isdir(hyp_only_model):
             hyp = get_model(model='discriminative',
                             model_name=decoder_model_name if decoder_model_name is not None else model_name,
                             model_path=hyp_only_model, num_labels=num_labels)
-            hyp = hyp.to(device)
+            hyp = hyp.to(hyp_device)
             if train_hyp:
                 optimizer_grouped_parameters = [
                     {
@@ -197,7 +201,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             hyp = get_model(model='discriminative',
                             model_name=decoder_model_name if decoder_model_name is not None else model_name,
                             model_path=None, num_labels=num_labels)
-            hyp = hyp.to(device)
+            hyp = hyp.to(hyp_device)
             optimizer_grouped_parameters = [
                 {
                     "params": hyp.parameters()
@@ -295,7 +299,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     # model.config.task_specific_params['summarization']['max_length'] = 64
 
     # import pdb; pdb.set_trace()
-    if torch.cuda.device_count()>1:
+    if torch.cuda.device_count()>1 and hyp is None:
         if hasattr(model, 'parallelize'):
             n_devices = torch.cuda.device_count()
             num_layers = model.config.num_layers if hasattr(model.config,'num_layers') else model.config.n_layer
@@ -355,12 +359,18 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         del model
         return fit_res.test_acc[-4] if len(fit_res.test_acc) >= 4 else fit_res.test_acc[-1]
     save_experiment(run_name, out_dir, cfg, fit_res)
+
+    del model
+    if hyp is not None:
+        del hyp
+    torch.cuda.empty_cache()
     
     if do_test:
         print('_'*50)
         test_model(run_name, out_dir+"_test", data_dir_prefix, model_name, checkpoints+"_model", model_type, decoder_model_name, seed, None,
                     bs_test, batches, None, 0, 0, hypothesis_only, False, False, label, attribution_map,
                     move_to_hypothesis, hyp_only_model, threshold, reduction, filt_method, **kw)
+
 
 
 def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_1.0/cl_snli',
@@ -370,7 +380,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                bs_test=8, batches=0,
                checkpoints=None, max_len=0, decoder_max_len=0,
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
-               label=0, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
+               label=None, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
                reduction='sum', filt_method='true', attribution_tokenizer=None, 
                **kw):
     if not seed:
@@ -394,7 +404,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             f = list(filter(lambda f: f.startswith(prefix), files))
             if len(f)>0:
                 path_ = os.path.join(attribution_map, f[0])
-                attribution_paths[i] = torch.load(path_, map_location=device)
+                attribution_paths[i] = torch.load(path_, map_location=torch.device('cpu'))
 
     hard_test_labels = None
     hard_test_lines = None
@@ -453,7 +463,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {"move_to_hypothesis":move_to_hypothesis}
     dataloader_args = {}
     train_args = {'reduction':reduction}
-
+    hyp = None
     if hyp_only_model is not None:
         if os.path.isdir(hyp_only_model):
             hyp = get_model(model='discriminative',
@@ -475,6 +485,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             trainer_type = OnelabelTrainer
         # data_args['tokenizer_decoder'] = tokenizer_decoder
         # data_args['generate_hypothesis'] = generate_hypothesis
+        # pdb.set_trace()
         train_args['possible_labels_ids'] = labels_ids
         train_args['tokenizer_encoder'] = tokenizer
         train_args['tokenizer_decoder'] = tokenizer_decoder
@@ -544,6 +555,11 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         fit_res = trainer.test(dl_hard_test, checkpoints=checkpoints, writer=writer)
         save_experiment(run_name + '_hard', out_dir, cfg, fit_res)
 
+    del model
+    if hyp is not None:
+        del hyp
+    torch.cuda.empty_cache()
+
 
 def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
                    model_path=None, model_name='sshleifer/distilbart-cnn-12-6', model_type='bart', save_results=None,
@@ -593,6 +609,67 @@ def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
     trainer = GenerativeTrainer(model=model, optimizer=None, scheduler=None, possible_labels_ids=labels_ids, 
                                 tokenizer_encoder=tokenizer, save_results=save_results, device=device)
     trainer.generate_dataset(dataloader)
+
+
+def pipline(run_name, hyp_only_model=None, model_name='facebook/bart-base', train_hyp=False, seed=None, attribution_map=None,
+                data_dir_prefix='./data/snli_1.0/cl_snli',word_dropout=0.0,weight_decay=0.0, hard_validation=False):
+    lr=1e-5
+    bs_train = 8
+    if 'bart' in model_name:
+        model_type = 'bart'
+    else:
+        model_type = 'encode-decode'
+    checkpoints = f'checkpoints/{run_name}'
+
+    ## if there is no hypothesis-only model, train one from scratch
+    if hyp_only_model is None:
+        print("********************** Training p(y|H) model **********************")
+        hyp_run_name = f'{run_name}_hyp_only'
+        hyp_checkpoints = f'checkpoints/{hyp_run_name}'
+        run_experiment(hyp_run_name, data_dir_prefix=data_dir_prefix,
+                   model_name=model_name, model_type='disc', seed=seed, 
+                   checkpoints=hyp_checkpoints, lr=lr, hypothesis_only=True)
+        hyp_only_model = f'{hyp_run_name}_model'
+    else:
+        print("********************** Using pre-trained p(y|H) model **********************")
+    torch.cuda.empty_cache()
+
+
+    model_path = f'{checkpoints}_model'
+    if not os.path.isdir(model_path):
+        ## Train p(P|y,H)*p(y|H) 
+        print("********************** Training p(P|y,H)*p(y|H) model **********************")
+        run_experiment(run_name, data_dir_prefix=data_dir_prefix, model_name=model_name, model_type=model_type, seed=seed, bs_train=bs_train,
+                    checkpoints=checkpoints, lr=lr, word_dropout=word_dropout, hyp_only_model=hyp_only_model, hard_validation=hard_validation, 
+                    weight_decay=weight_decay, attribution_map=attribution_map, train_hyp=train_hyp)
+    else:
+        print("********************** Using pre-trained p(P|y,H) model **********************")
+    
+
+    print("********************** Testing p(P|y,H) model **********************")
+    test_model(run_name=run_name, out_dir="results_test", data_dir_prefix=data_dir_prefix, model_name=model_name,
+                model_path=model_path, model_type=model_type, seed=seed, attribution_map=attribution_map)
+
+    if train_hyp:
+        hyp_only_model = f'{model_path}_disc_prior'
+
+    ft_run_name = f'{run_name}_ft'
+    ft_checkpoints = f'checkpoints/{ft_run_name}'
+    ft_lr = lr / 2
+
+    print("********************** Fine-tuning model (p(P|y,H)*p(y|H)) / (sum y' of p(P|y',H)*p(y'|H)) **********************")
+    run_experiment(ft_run_name, data_dir_prefix=data_dir_prefix, bs_train=bs_train, model_name=model_name, model_type=model_type, model_path=model_path, seed=seed,
+                   checkpoints=ft_checkpoints, lr=ft_lr, word_dropout=word_dropout, hyp_only_model=hyp_only_model, hard_validation=hard_validation, 
+                   weight_decay=weight_decay, attribution_map=attribution_map, gamma=1.0)
+    ft_model_path = f'{ft_checkpoints}_model'
+
+    print("********************** Testing fine-tuned model **********************")
+    test_model(run_name=ft_run_name, out_dir="results_test", data_dir_prefix=data_dir_prefix, model_name=model_name, 
+                model_path=ft_model_path, model_type=model_type, seed=seed, attribution_map=attribution_map)
+
+    print("********************** Finished **********************")
+
+    
 
 
 def save_experiment(run_name, out_dir, config, fit_res):
@@ -815,6 +892,31 @@ def parse_cli():
                          help='Test batch size', default=8)
     sp_comb.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
                          default=None, required=False)
+
+    # Experiment config
+    sp_pip = sp.add_parser('pipline', help='Pipline')
+    sp_pip.set_defaults(subcmd_fn=pipline)
+    sp_pip.add_argument('--run-name', '-n', type=str,
+                     help='Name of run and output file', required=True)
+    sp_pip.add_argument('--seed', '-s', type=int, help='Random seed',
+                     default=None, required=False)
+    sp_pip.add_argument('--attribution-map', '-am', type=str, 
+                     help='path of attribution maps folder', default=None)
+    sp_pip.add_argument('--data-dir-prefix', type=str,
+                     help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
+    sp_pip.add_argument('--word-dropout', '-wdo', type=float,
+                     help='Word dropout rate during training', default=0.0)
+    sp_pip.add_argument('--hyp-only-model', '-hom', type=str,
+                     help='If you want to weigh loss by htpothesis only output', default=None)
+    sp_pip.add_argument('--train-hyp', dest='train_hyp', action='store_true')
+    sp_pip.add_argument('--hard-validation', '-hv', dest='hard_validation', action='store_true')
+    
+    sp_pip.set_defaults(hard_validation=False, train_hyp=False)
+
+    sp_pip.add_argument('--model-name', type=str,
+                     help='Name of the huggingface model', default='facebook/bart-base')
+    sp_pip.add_argument('--weight-decay', '-wd', type=float,
+                        default=0.0)
 
 
     parsed = p.parse_args()

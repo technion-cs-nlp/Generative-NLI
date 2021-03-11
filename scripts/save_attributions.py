@@ -23,12 +23,12 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 model_name = 'bert-base-uncased'
 # # model_path = 'checkpoints/exp_b2b_mnli_disc_model'
-model_path = 'checkpoints/bert_disc_1_epoch_model'
+model_path = 'checkpoints/exp_b2b_mnli_disc_model'
 # model_name = 'facebook/bart-base'
 # model_path = 'checkpoints/exp_bart_b_disc_model'
-prefix = 'bert_1_epoch'
-labels_type = 'pred'
-name = "train_set"
+prefix = 'mnli'
+labels_type = 'true'
+name = "hard_test_set"
 
 # load model
 model = AutoModelForSequenceClassification.from_pretrained(model_path, return_dict=False)
@@ -44,8 +44,8 @@ model.zero_grad()
 # load tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 # create dataset
-data_dir_prefix = './data/snli_1.0/cl_snli'
-# data_dir_prefix = './data/mnli/cl_multinli'
+# data_dir_prefix = './data/snli_1.0/cl_snli'
+data_dir_prefix = './data/mnli/cl_multinli'
 test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
 val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
 

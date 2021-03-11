@@ -330,7 +330,7 @@ class Trainer(abc.ABC):
                     writer.add_scalar('Loss/train', train_loss[-1], epoch)
                     writer.add_scalar('Accuracy/train', train_acc[-1], epoch)
             
-            if checkpoint_filename is not None and train_loss[-1] <= min(train_loss):
+            if checkpoint_filename is not None and test_loss[-1] <= min(test_loss) and hasattr(self,'gamma') and self.gamma>0.0:
                 self.model.save_pretrained(f'{model_filename}_min_loss')
                 print(f'*** Saved model {model_filename}_min_loss ')
 
@@ -569,12 +569,12 @@ class GenerativeTrainer(Trainer):
             H = list(H)
             input_dict = self.tokenizer_decoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
 
-        batch_encoded = [input_dict[item].to(self.device) for item in ['input_ids', 'attention_mask']]
-        batch_encoded += [labels.to(self.device)]
+        batch_encoded = [input_dict[item].to(self.hyp_prior_model.device) for item in ['input_ids', 'attention_mask']]
+        batch_encoded += [labels.to(self.hyp_prior_model.device)]
 
         if 'token_type_ids' in input_dict:
             token_type_ids = input_dict['token_type_ids']
-            batch_encoded += [token_type_ids.to(self.device)]
+            batch_encoded += [token_type_ids.to(self.hyp_prior_model.device)]
         else:
             batch_encoded += [None]
 
@@ -1040,21 +1040,22 @@ class GenerativeTrainer(Trainer):
     def calc_disc_loss(self, batch):
         batch_hyp_only = (batch[1], batch[2])  # H, y
         y_hyp, attention_mask_hyp, labels_hyp, token_type_ids_hyp = self._prepare_batch_disc(batch_hyp_only)
-        y_hyp = y_hyp.to(self.device)
-        attention_mask_hyp = attention_mask_hyp.to(self.device)
+        y_hyp = y_hyp.to(self.hyp_prior_model.device)
+        attention_mask_hyp = attention_mask_hyp.to(self.hyp_prior_model.device)
         # labels_hyp = labels.to(self.device)
         # labels_hyp.to(self.device)
         args = {
             'input_ids':y_hyp,
             'attention_mask':attention_mask_hyp,
-            'labels':batch[2].to(self.device)
+            'labels':batch[2].to(self.hyp_prior_model.device)
         }
         if token_type_ids_hyp is not None:
-            token_type_ids_hyp = token_type_ids_hyp.to(self.device)
+            token_type_ids_hyp = token_type_ids_hyp.to(self.hyp_prior_model.device)
             args['token_type_ids']=token_type_ids_hyp
         # import pdb; pdb.set_trace()
         prior = self.hyp_prior_model(**args)
         prior = prior[0]
+        prior = prior.to(self.device)
         return prior
 
     def test_batch(self, batch) -> BatchResult:
