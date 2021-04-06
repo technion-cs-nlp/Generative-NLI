@@ -23,6 +23,21 @@ from transformers import GPT2Tokenizer
 return_acc = False
 mode = 'test'
 
+def gen_loss(i, ret_val, model, model_kwargs, inp_x, attention, reduce, reduction):
+                outputs = model(**model_kwargs)
+                loss = outputs[0]
+                loss = loss.view(inp_x.size(0), -1)
+                attention = attention[:, 1:] if loss.shape != attention.shape else attention
+                # import pdb; pdb.set_trace()
+                loss = reduce(loss, attention=attention, reduction=reduction)
+                ret_val.value = loss
+            
+def hyp_loss(i,ret_val, num_labels, batch_size, batch, calc_disc_loss):
+    test_labels = torch.arange(num_labels).repeat(batch_size,1).T.reshape(-1)  # (0,...,0,1,...,1,2,...,2)
+    hyp_batch_test = (None, batch[1]*3, test_labels)
+    prior = calc_disc_loss(hyp_batch_test)
+    ret_val.value = prior
+
 
 def create_args_generative(batch, labels, device):
     x, encoder_attention_mask, y, decoder_attention_mask = batch
@@ -491,6 +506,8 @@ class Trainer(abc.ABC):
                     losses.append(loss_item)
 
                 return_acc = False
+            
+            # import pdb; pdb.set_trace()
 
             avg_loss = sum(losses) / num_batches
             num = num_samples if eval_every == 1 or mode == 'test' else num_eval_batches * dl.batch_size
@@ -508,7 +525,7 @@ class GenerativeTrainer(Trainer):
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
                  create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
                  rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
-                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, device=None, **kwargs):
+                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -531,6 +548,7 @@ class GenerativeTrainer(Trainer):
         if self.save_results is not None and mnli_ids_path is not None:
             self._get_ids_for_mnli(mnli_ids_path)
         self.decoder_only = decoder_only
+        self.test_with_prior = test_with_prior
 
     def _prepare_batch(self, batch):
         P, H, labels = batch[0:3]
@@ -700,7 +718,7 @@ class GenerativeTrainer(Trainer):
                     bad_labels = (batch[2] + delta) % self.num_labels
                     batch_batch = (None, batch[1], bad_labels)
                     bad_prior = self.calc_disc_loss(batch_batch)
-                    bad_loss += bad_prior               
+                    bad_loss += bad_prior
 
                 losses.append(bad_loss)
 
@@ -1202,18 +1220,35 @@ class GenerativeTrainer(Trainer):
         num_labels = len(self.labels)
 
         with torch.no_grad():
+            # if not hasattr(self, 'hyp_prior_model') or self.model.device == self.hyp_prior_model.device:
             outputs = self.model(**model_kwargs)
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
             attention = attention[:, 1:] if loss.shape != attention.shape else attention
             # import pdb; pdb.set_trace()
             loss = self._reduce(loss, attention=attention, reduction=self.reduction)
-            if self.hyp_prior_model is not None:
+            if self.hyp_prior_model is not None and self.test_with_prior:
                 # pdb.set_trace()
                 test_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)  # (0,...,0,1,...,1,2,...,2)
                 hyp_batch_test = (None, batch[1]*3, test_labels)
                 prior = self.calc_disc_loss(hyp_batch_test)
                 loss += prior
+            # else:
+            #     ## If we have multi-gpus
+            #     from multiprocessing import Process, Manager
+            #     manager = Manager()
+            #     return_dict = manager.dict()
+            #     jobs = []
+            #     p_gen = Process(target=gen_loss, args=(0, return_dict, self.model, model_kwargs, inp_x, attention, self._reduce, self.reduction))
+            #     jobs.append(p_gen)
+            #     p_gen.start()
+            #     p_hyp = Process(target=hyp_loss, args=(1, return_dict, self.num_labels, batch_size, batch, self.calc_disc_loss))
+            #     jobs.append(p_hyp)
+            #     p_hyp.start()
+            #     for p in jobs:
+            #         p.join()
+            #     loss = return_dict[0]+return_dict[1]
+
             ret = torch.min(loss.view(len(self.labels), -1), dim=0)
             pred = ret.indices
             if mode == 'test':
@@ -1481,7 +1516,7 @@ class DiscriminativeTrainer(Trainer):
             model_kwargs['token_type_ids'] = token_type_ids
 
         self.optimizer.zero_grad()
-
+        # pdb.set_trace()
         outputs = self.model(input_ids=x, **model_kwargs)
 
         loss, logits = outputs[:2]
