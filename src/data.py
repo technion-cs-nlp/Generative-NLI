@@ -171,7 +171,6 @@ class DiscriminativeDataset(Dataset):
         return res
 
     def __getitem__(self, index):
-
         if type(self.lines) == list:
             split = self.lines[index].split(self.sep)
 

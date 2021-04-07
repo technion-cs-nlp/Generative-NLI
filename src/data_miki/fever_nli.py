@@ -114,6 +114,8 @@ class Fever(datasets.GeneratorBasedBuilder):
         train_path, validation_path = dl_manager.download([
             "https://www.dropbox.com/s/v1a0depfg7jp90f/fever.train.jsonl?dl=1",
             "https://www.dropbox.com/s/bdwf46sa2gcuf6j/fever.dev.jsonl?dl=1"
+            # "https://s3-eu-west-1.amazonaws.com/fever.public/train.jsonl",
+            # "https://s3-eu-west-1.amazonaws.com/fever.public/shared_task_dev.jsonl"
         ])
         # train_path = os.path.join(train_path, "train_fitems.jsonl")
         # validation_path = os.path.join(validation_path, "dev_fitems.jsonl")

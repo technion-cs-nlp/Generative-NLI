@@ -30,7 +30,7 @@ def freeze_params(params, ratio):
 def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=None,
             tokenizer_decoder=None, decoder_model_name=None, 
             model_path=None, param_freezing_ratio=0.0, num_labels=3, tie_embeddings=False,
-            label=None, gamma=0.5):
+            label=None, gamma=0.5, tie_encoder_decoder=False):
     res_model = None
     if tokenizer is None:
         from transformers import AutoTokenizer
@@ -53,7 +53,6 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
                 res_model.config.eos_token_id = tokenizer.sep_token_id
                 res_model.config.pad_token_id = tokenizer.pad_token_id
             if label is None:
-                pass
                 res_model.encoder.resize_token_embeddings(len(tokenizer))
                 res_model.config.encoder.vocab_size = len(tokenizer)
             res_model.config.vocab_size = res_model.config.encoder.vocab_size
@@ -84,8 +83,25 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
     
     else:
         model_name = model_path if model_path is not None else model_name
-
-    if model  == 'bart':
+    if model == 'bert2bert':
+        if model_path is None:
+            from transformers import BertGenerationEncoder, BertGenerationDecoder, EncoderDecoderModel
+            encoder = BertGenerationEncoder.from_pretrained(model_name, bos_token_id=101, eos_token_id=102)
+            # add cross attention layers and use BERT's cls token as BOS token and sep token as EOS token
+            decoder = BertGenerationDecoder.from_pretrained(model_name, add_cross_attention=True, is_decoder=True, bos_token_id=101, eos_token_id=102)
+            bert2bert = EncoderDecoderModel(encoder=encoder, decoder=decoder, tie_encoder_decoder=tie_encoder_decoder)
+            # if tie_encoder_decoder:
+            #     # import pdb; pdb.set_trace()
+            #     bert2bert.config.tie_encoder_decoder=True
+            #     bert2bert.tie_weights()
+            if label is None:
+                    bert2bert.encoder.resize_token_embeddings(len(tokenizer))
+                    bert2bert.config.encoder.vocab_size = len(tokenizer)
+        else:
+            from transformers import EncoderDecoderModel
+            bert2bert = EncoderDecoderModel.from_pretrained(model_path)
+        return bert2bert
+    elif model  == 'bart':
         from transformers import BartForConditionalGeneration
         res_model = BartForConditionalGeneration.from_pretrained(model_name)
     

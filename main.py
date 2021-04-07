@@ -44,7 +44,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    gradual_unfreeze=False,
-                   ret_res=False, gamma=0.0,
+                   ret_res=False, gamma=0.0, tie_encoder_decoder=False, 
                    # Dataset params
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
                    label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
@@ -162,7 +162,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     size_train = batches * bs_train if batches > 0 else 10 ** 8
 
     if data_dir_prefix == 'fever':
-        all_labels_text = ['Supported','NotEnoughInfo','Refuted']
+        # all_labels_text = ['Supported','NotEnoughInfo','Refuted']
+        all_labels_text = ['A','B','C']
     else:
         all_labels_text = list(set(
             test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
@@ -234,7 +235,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     else:
         dataset = DiscriminativeDataset
 
-    if model_type in ['encode-decode', 'bart', 'shared', 't5', 'decoder-only']:
+    if model_type in ['encode-decode', 'bart', 'shared', 't5', 'decoder-only', 'bert2bert']:
         if label is None:
             trainer_type = GenerativeTrainer
         else:
@@ -324,7 +325,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                       param_freezing_ratio=param_freezing_ratio,
                       tie_embeddings=tie_embeddings,
                       label=label,
-                      gamma=gamma)
+                      gamma=gamma,
+                      tie_encoder_decoder=tie_encoder_decoder)
 
     # model.config.min_length = 5
     # model.config.max_length = 64
@@ -436,9 +438,14 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     if data_dir_prefix == 'fever':
         from src.data_miki.datasets import load_dataset_aux
-        fever, info = load_dataset_aux('fever_symmetric')
-        test_lines = fever['test']
+        fever, _ = load_dataset_aux('fever_nli')
+        # train_lines = fever['train']
+        # train_labels = None
+        test_lines = fever['validation']
         test_labels = None
+        fever_test, _ = load_dataset_aux('fever_symmetric')
+        hard_test_lines = fever_test['test']
+        hard_test_labels = None
     else:
         with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
             test_labels = test_labels_file.readlines()
@@ -473,7 +480,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     size_test = batches * bs_test if batches > 0 else 10 ** 8
 
     if data_dir_prefix == 'fever':
-        all_labels_text = ['Supported','NotEnoughInfo','Refuted']
+        # all_labels_text = ['Supported','NotEnoughInfo','Refuted']
+        all_labels_text = ['A','B','C']
     else:
         all_labels_text = list(set(
             test_labels[:size_test] + val_labels[:size_test]))
@@ -511,7 +519,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         train_args['test_with_prior'] = test_with_prior
 
     train_args['save_results'] = save_results
-    if model_type in ['encode-decode', 'bart', 'shared', 'decoder-only']:
+    if model_type in ['encode-decode', 'bart', 'shared', 'decoder-only', 'bert2bert']:
         dataset = DiscriminativeDataset
         if label is None:
             trainer_type = GenerativeTrainer
@@ -574,7 +582,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     trainer = trainer_type(model, optimizer=None, scheduler=None, device=device, **train_args)
     fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)
     save_experiment(run_name, out_dir, cfg, fit_res)
-    if hard_test_labels is not None and hard_test_lines is not None:
+    if hard_test_lines is not None:
         if hasattr(trainer, 'save_results') and trainer.save_results is not None:
             trainer.save_results += '_hard'
         if attribution_map is not None:
@@ -835,10 +843,12 @@ def parse_cli():
                         help='Create generative model only for one label', default=None)
     sp_exp.add_argument('--rev', type=float,
                         help='For hinge loss', default=0.0)
+    sp_exp.add_argument('--tie-encoder-decoder', '-ted', dest='tie_encoder_decoder', action='store_true')
+
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
                         generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False,
                         hard_validation=False, merge_train=False, train_hyp=False, test_with_prior=False,premise_only=False,
-                        cheat=False)
+                        cheat=False, tie_encoder_decoder=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,

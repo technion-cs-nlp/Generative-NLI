@@ -698,10 +698,7 @@ class GenerativeTrainer(Trainer):
             prior = self.calc_disc_loss(batch)
             loss += prior
 
-        if self.rev > 0.0:
-            min_label = min(self.labels)
-            batch_rev = (batch[1], batch[0], batch[2])
-        elif self.gamma > 0.0:  ## Joint
+        if self.gamma > 0.0:  ## Joint
             losses = [loss.clone()]
             for delta in range(1, len(self.labels)):
                 bad_x = x.clone().to(self.device)
@@ -1077,6 +1074,7 @@ class GenerativeTrainer(Trainer):
         return prior
 
     def test_batch(self, batch) -> BatchResult:
+        # import pdb; pdb.set_trace()
         if not self.decoder_only:
             inp_x = []
             inp_y = []
@@ -1277,7 +1275,7 @@ class GenerativeTrainer(Trainer):
             
         correct_labels = correct_labels.to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
-
+        # pdb.set_trace()
         if self.save_results is not None:
             if not os.path.isfile(self.save_results + '.csv'):
                 with open(self.save_results + '.csv', 'w') as f:
