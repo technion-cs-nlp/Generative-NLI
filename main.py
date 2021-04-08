@@ -25,7 +25,6 @@ import math
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim.sgd import SGD
 
-
 # make sure GPT2 appends EOS in begin and end
 def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
     outputs = [self.bos_token_id] + token_ids_0 + [self.eos_token_id]
@@ -87,6 +86,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         from src.data_miki.datasets import load_dataset_aux
         fever, _ = load_dataset_aux('fever_nli')
         train_lines = fever['train']
+        train_lines = train_lines.filter(lambda x: x['label']!=2)
         train_labels = None
         val_lines = fever['validation']
         val_labels = None
@@ -163,7 +163,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     if data_dir_prefix == 'fever':
         # all_labels_text = ['Supported','NotEnoughInfo','Refuted']
-        all_labels_text = ['A','B','C']
+        # all_labels_text = ['A','B','C']
+        all_labels_text = ['A','B']
     else:
         all_labels_text = list(set(
             test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
@@ -441,10 +442,13 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         fever, _ = load_dataset_aux('fever_nli')
         # train_lines = fever['train']
         # train_labels = None
-        test_lines = fever['validation']
-        test_labels = None
+        # test_lines = fever['validation']
+        # test_labels = None
         fever_test, _ = load_dataset_aux('fever_symmetric')
-        hard_test_lines = fever_test['test']
+        test_lines = fever_test['test']
+        test_labels = None
+        fever_testv2, _ = load_dataset_aux('fever_symmetricv2')
+        hard_test_lines = fever_testv2['test']
         hard_test_labels = None
     else:
         with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
@@ -481,7 +485,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     if data_dir_prefix == 'fever':
         # all_labels_text = ['Supported','NotEnoughInfo','Refuted']
-        all_labels_text = ['A','B','C']
+        # all_labels_text = ['A','B','C']
+        all_labels_text = ['A','B']
     else:
         all_labels_text = list(set(
             test_labels[:size_test] + val_labels[:size_test]))

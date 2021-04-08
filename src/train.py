@@ -1272,7 +1272,7 @@ class GenerativeTrainer(Trainer):
         pred.to('cpu')
         if batch[2] is None:
             return pred
-            
+
         correct_labels = correct_labels.to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
         # pdb.set_trace()

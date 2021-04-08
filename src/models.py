@@ -97,6 +97,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
             if label is None:
                     bert2bert.encoder.resize_token_embeddings(len(tokenizer))
                     bert2bert.config.encoder.vocab_size = len(tokenizer)
+            res_model.config.vocab_size = res_model.config.encoder.vocab_size
         else:
             from transformers import EncoderDecoderModel
             bert2bert = EncoderDecoderModel.from_pretrained(model_path)

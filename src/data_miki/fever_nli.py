@@ -96,7 +96,7 @@ class Fever(datasets.GeneratorBasedBuilder):
                     "id": datasets.Value("int64"),
                     "claim": datasets.Value("string"),
                     "evidence": datasets.Value("string"),
-                    "label": datasets.features.ClassLabel(names=["SUPPORTS", "NOT ENOUGH INFO", "REFUTES"]),
+                    "label": datasets.features.ClassLabel(names=["SUPPORTS", "REFUTES", "NOT ENOUGH INFO"]),
                 }
             ),
             # No default supervised_keys (as we have to pass both premise

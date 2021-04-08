@@ -51,6 +51,13 @@ DATASETS = {
         sentence2_key='claim',
         binerize=True
     ),
+    'fever_symmetricv2': DatasetInfo(
+        dataset_config_file='fever_symmetricv2.py',
+        ignored_keys=['id'],
+        sentence1_key='evidence',
+        sentence2_key='claim',
+        binerize=True
+    ),
     'multi_nli_hard_matched': DatasetInfo(
         dataset_config_file='multi_nli_hard.py',
         test_dataset_name='test_matched'
