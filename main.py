@@ -39,7 +39,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    early_stopping=3, checkpoints=None, lr=1e-5, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0, label_smoothing_epsilon=0.0,
                    tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='sum',
-                   hyp_only_model=None, hard_validation=False, merge_train=False, test_with_prior=False, 
+                   hyp_only_model=None, hard_validation=False, merge_train=False, test_with_prior=False, sched=None,
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    gradual_unfreeze=False,
@@ -47,7 +47,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Dataset params
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
                    label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
-                   attribution_tokenizer=None, premise_only=False, cheat=False):
+                   attribution_tokenizer=None, premise_only=False, cheat=False, calc_uniform=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -86,7 +86,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         from src.data_miki.datasets import load_dataset_aux
         fever, _ = load_dataset_aux('fever_nli')
         train_lines = fever['train']
-        train_lines = train_lines.filter(lambda x: x['label']!=2)
+        # train_lines = train_lines.filter(lambda x: x['label']!=2)
         train_labels = None
         val_lines = fever['validation']
         val_labels = None
@@ -162,13 +162,21 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     size_train = batches * bs_train if batches > 0 else 10 ** 8
 
     if data_dir_prefix == 'fever':
-        # all_labels_text = ['Supported','NotEnoughInfo','Refuted']
+        all_labels_text = ["SUPPORTS", "REFUTES", "NOT-ENOUGH-INFO"]
         # all_labels_text = ['A','B','C']
-        all_labels_text = ['A','B']
+        # all_labels_text = ['A','B']
     else:
         all_labels_text = list(set(
-            test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
-        all_labels_text.sort()
+            # test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
+            test_labels + train_labels + val_labels + hard_test_labels))
+    all_labels_text.sort()
+    ratios = None
+    if calc_uniform:
+        ratios = [1/3,1/3,1/3]
+        # pdb.set_trace()
+        for i,l in enumerate(all_labels_text):
+            rate = len([sam for sam in train_labels if sam==l]) / len(train_labels)
+            ratios[i] = rate
     
     num_labels = len(all_labels_text)
     # import pdb; pdb.set_trace()
@@ -192,9 +200,9 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     dataset = None
     trainer_type = None
-    data_args = {"move_to_hypothesis":move_to_hypothesis}
+    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text}
     dataloader_args = {}
-    train_args = {'reduction': reduction}
+    train_args = {'reduction': reduction, 'ratios':ratios}
 
     hyp = None
     optimizer_grouped_parameters = []
@@ -370,8 +378,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     num_steps = epochs * num_batches
     print(f"Number of training steps: {num_steps}")
     scheduler = None
-    # scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=2*num_batches)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_batches,
+    if 'linear' in sched.lower():
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_batches,
+                                                num_training_steps=num_steps)
+    elif 'warmup' in sched.lower():
+        scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=num_batches)
+    elif 'cosine' in sched.lower():
+        scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=num_batches,
                                                 num_training_steps=num_steps)
     writer = SummaryWriter()
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
@@ -404,7 +417,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                checkpoints=None, max_len=0, decoder_max_len=0,
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
                label=None, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
-               reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False, premise_only=False):
+               reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False, premise_only=False, calc_uniform=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -453,23 +466,23 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     else:
         with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
             test_labels = test_labels_file.readlines()
-        
         with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
             test_lines = test_lines_file.readlines()
-        
+        with open(data_dir_prefix + f'_train_lbl_file') as train_labels_file:
+            train_labels = train_labels_file.readlines()
+        with open(data_dir_prefix + f'_train_source_file') as train_lines_file:
+            train_lines = train_lines_file.readlines()
         with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
             val_labels = val_labels_file.readlines()
-        
         with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
             val_lines = val_lines_file.readlines()
-        
         if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
                 os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
             with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
                 hard_test_labels = hard_test_labels_file.readlines()
                 
             with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
-                hard_test_lines = hard_test_lines_file.readlines()
+                hard_test_lines = hard_test_lines_file.readlines()         
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if 'gpt' in model_name:
@@ -484,17 +497,27 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     size_test = batches * bs_test if batches > 0 else 10 ** 8
 
     if data_dir_prefix == 'fever':
-        # all_labels_text = ['Supported','NotEnoughInfo','Refuted']
+        all_labels_text = ["SUPPORTS", "REFUTES", "NOT-ENOUGH-INFO"]
         # all_labels_text = ['A','B','C']
-        all_labels_text = ['A','B']
+        # all_labels_text = ['A','B']
     else:
+        size_train = 10**8
         all_labels_text = list(set(
-            test_labels[:size_test] + val_labels[:size_test]))
-        all_labels_text.sort()
+            # test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
+            test_labels + train_labels + val_labels + hard_test_labels))
+    all_labels_text.sort()  
+    ratios = None
+    # if calc_uniform:
+    #     ratios = [1/3,1/3,1/3]
+    #     # pdb.set_trace()
+    #     for i,l in enumerate(all_labels_text):
+    #         rate = len([sam for sam in train_labels if sam==l]) / len(train_labels)
+    #         ratios[i] = rate
+
     num_labels = len(all_labels_text)
 
     if not model_type.startswith('disc') and label is None:
-        all_labels = ['[' + l.lower().replace('\n', '') + ']' for l in all_labels_text]
+        all_labels = ['[' + l.lower().strip() + ']' for l in all_labels_text]
         tokenizer.add_tokens(all_labels)
         labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
         # labels_ids = [2870,2874,2876]
@@ -506,9 +529,10 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     dataset = None
     trainer_type = None
-    data_args = {"move_to_hypothesis":move_to_hypothesis}
+    # pdb.set_trace()
+    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text}
     dataloader_args = {}
-    train_args = {'reduction':reduction}
+    train_args = {'reduction':reduction, 'ratios':ratios}
     hyp = None
     if hyp_only_model is not None:
         if os.path.isdir(hyp_only_model):
@@ -521,6 +545,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
         hyp = hyp.to(device)
         train_args['hyp_prior_model'] = hyp
+        train_args['test_with_prior'] = test_with_prior
+    if ratios is not None:
         train_args['test_with_prior'] = test_with_prior
 
     train_args['save_results'] = save_results
@@ -566,7 +592,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     data_args.pop('mnli_ids_path',None)
     data_args.pop('attribution_map',None)
-    # ds_val = dataset(val_lines, val_labels, tokenizer, **data_args)
+    ds_val = dataset(val_lines, val_labels, tokenizer, **data_args)
+
+    ds_train = dataset(train_lines, train_labels, tokenizer, **data_args)
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
@@ -578,7 +606,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     model.to(device)
 
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, **dataloader_args)
-    # dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
+    dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
+    dl_train = torch.utils.data.DataLoader(ds_train, bs_test, shuffle=False, **dataloader_args)
 
     writer = None
     if checkpoints is None:
@@ -819,6 +848,8 @@ def parse_cli():
                         help='How many of the params to freeze', default=0.0)
     sp_exp.add_argument('--optimizer-type', '-ot', type=str,
                         help='Which type of optimizer to use', default="Adam")
+    sp_exp.add_argument('--sched', type=str,
+                        help='Which type of optimizer to use', default="linear")
     sp_exp.add_argument('--reduction', '-reduce', type=str,
                         help='How to reduce loss, can be "sum" or "mean"', default="sum")
     sp_exp.add_argument('--momentum', '-m', type=float,
@@ -836,6 +867,7 @@ def parse_cli():
     sp_exp.add_argument('--train-hyp', dest='train_hyp', action='store_true')
     sp_exp.add_argument('--test-with-prior', '-twp', dest='test_with_prior', action='store_true')
     sp_exp.add_argument('--cheat', dest='cheat', action='store_true')
+    sp_exp.add_argument('--calc-uniform', '-cu', dest='calc_uniform', action='store_true')
 
     sp_exp.add_argument('--tie-embeddings', '-te', dest='tie_embeddings', action='store_true')
     sp_exp.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
@@ -853,7 +885,7 @@ def parse_cli():
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
                         generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False,
                         hard_validation=False, merge_train=False, train_hyp=False, test_with_prior=False,premise_only=False,
-                        cheat=False, tie_encoder_decoder=False)
+                        cheat=False, tie_encoder_decoder=False, calc_uniform=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -920,7 +952,8 @@ def parse_cli():
     sp_test.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)
     sp_test.add_argument('--test-with-prior', '-twp', dest='test_with_prior', action='store_true')
-    sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False)
+    sp_test.add_argument('--calc-uniform', '-cu', dest='calc_uniform', action='store_true')
+    sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False, calc_uniform=False)
 
 
     # # Model

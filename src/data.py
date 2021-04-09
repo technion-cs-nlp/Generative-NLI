@@ -117,11 +117,12 @@ class DiscriminativeDataset(Dataset):
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
                  non_discriminative_bias=False, seed=42, threshold=0.0, 
                  attribution_map=None, move_to_hypothesis=False, filt_method='true',
-                 attribution_tokenizer=None):
+                 attribution_tokenizer=None, possible_labels=None):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         super().__init__()
         self.lines = lines
+        self.possible_labels = possible_labels
         if labels is not None:
             self.labels = self._labels_to_idx(labels)
             assert len(lines) == len(labels)
@@ -164,23 +165,25 @@ class DiscriminativeDataset(Dataset):
         return hist
 
     def _labels_to_idx(self, labels):
-        labels_ids = list(set(labels))
-        labels_ids.sort()
-        res = [labels_ids.index(label) for label in labels]
+        # import pdb;pdb.set_trace()
+        if self.possible_labels is None:
+            self.possible_labels = list(set(labels))
+        self.possible_labels.sort()
+        res = [self.possible_labels.index(label) for label in labels]
 
         return res
 
     def __getitem__(self, index):
-        if type(self.lines) == list:
-            split = self.lines[index].split(self.sep)
+        # if type(self.lines) == list:
+        split = self.lines[index].split(self.sep)
 
-            premise = split[0]
-            hypothesis = split[1].replace('\n', '')
-            lbl = torch.tensor(self.labels[index])
-        else:
-            premise = self.lines[index]["evidence"]
-            hypothesis = self.lines[index]["claim"]
-            lbl = torch.tensor(self.lines[index]["label"])
+        premise = split[0]
+        hypothesis = split[1].replace('\n', '')
+        lbl = torch.tensor(self.labels[index])
+        # else:
+        #     premise = self.lines[index]["evidence"]
+        #     hypothesis = self.lines[index]["claim"]
+        #     lbl = torch.tensor(self.lines[index]["label"])
 
         if self.attribution_map is not None and self.attribution_map[index] is not None:
             threshold = self.threshold
@@ -288,9 +291,10 @@ class HypothesisOnlyDataset(Dataset):
 
     def __init__(self, lines, labels=None, tokenizer=None, sep='|||', max_len=512, dropout=0.0, premise_only=False, 
                     threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true',
-                    attribution_tokenizer=None, **kw):
+                    attribution_tokenizer=None, possible_labels=None, **kw):
         super().__init__()
         self.lines = lines
+        self.possible_labels=possible_labels
         if labels is not None:
             self.labels = self._labels_to_idx(labels)
             assert len(lines) == len(labels)
@@ -314,9 +318,10 @@ class HypothesisOnlyDataset(Dataset):
 
 
     def _labels_to_idx(self, labels):
-        labels_ids = list(set(labels))
-        labels_ids.sort()
-        res = [labels_ids.index(label) for label in labels]
+        if self.possible_labels is None:
+            self.possible_labels = list(set(labels))
+        self.possible_labels.sort()
+        res = [self.possible_labels.index(label) for label in labels]
 
         return res
 

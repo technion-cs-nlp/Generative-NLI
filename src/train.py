@@ -525,7 +525,7 @@ class GenerativeTrainer(Trainer):
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
                  create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
                  rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
-                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, device=None, **kwargs):
+                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, device=None, ratios=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -549,6 +549,7 @@ class GenerativeTrainer(Trainer):
             self._get_ids_for_mnli(mnli_ids_path)
         self.decoder_only = decoder_only
         self.test_with_prior = test_with_prior
+        self.ratios = ratios
 
     def _prepare_batch(self, batch):
         P, H, labels = batch[0:3]
@@ -639,7 +640,7 @@ class GenerativeTrainer(Trainer):
 
     def train_batch(self, batch) -> BatchResult:
         if self.epsilon > 0.0:
-            return self.train_batch_label_smoothing(batch)
+            self.train_batch_label_smoothing(batch)
         elif self.decoder_only:
             return self.train_batch_decoder(batch)
         # elif self.gamma > 0.0:
@@ -682,14 +683,17 @@ class GenerativeTrainer(Trainer):
 
         # prior = -torch.log(torch.tensor(1/self.num_labels))  
         outputs = self.model(input_ids=x, **model_kwargs)
-        # import pdb; pdb.set_trace()
         loss = outputs[0]
         loss = loss.view(batch_size, -1)
         # import pdb; pdb.set_trace()
         attention = decoder_attention_mask[:,
                     1:] if loss.shape != decoder_attention_mask.shape else decoder_attention_mask
         loss = self._reduce(loss, attention, reduction=self.reduction)
-
+        if self.ratios is not None:
+            # import pdb; pdb.set_trace()
+            rates = torch.tensor([self.ratios[i] for i in batch[2]],device=self.device)
+            rates = -(rates).log()
+            loss = loss + rates
         # if self.hyp_prior_model is not None:
         #     # outputs_hyp = self.model(input_ids=x, **model_kwargs)
         #     prior = self.calc_disc_loss(batch)
@@ -735,7 +739,7 @@ class GenerativeTrainer(Trainer):
 
         
         
-        loss_obj = self._reduce(loss, attention=None, reduction=self.reduction)
+        loss_obj = self._reduce(loss, attention=None, reduction='mean')
 
         # torch.cuda.empty_cache()
         if self.clip:
@@ -1223,8 +1227,14 @@ class GenerativeTrainer(Trainer):
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
             attention = attention[:, 1:] if loss.shape != attention.shape else attention
-            # import pdb; pdb.set_trace()
             loss = self._reduce(loss, attention=attention, reduction=self.reduction)
+            if self.ratios is not None and self.test_with_prior:
+                # import pdb; pdb.set_trace()
+                rate_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)
+                rates = torch.tensor([self.ratios[i] for i in rate_labels],device=self.device)
+                rates = -(rates).log()
+                loss = loss + rates
+            # import pdb; pdb.set_trace()
             if self.hyp_prior_model is not None and self.test_with_prior:
                 # pdb.set_trace()
                 test_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)  # (0,...,0,1,...,1,2,...,2)
@@ -1249,6 +1259,7 @@ class GenerativeTrainer(Trainer):
 
             ret = torch.min(loss.view(len(self.labels), -1), dim=0)
             pred = ret.indices
+            # import pdb; pdb.set_trace()
             if mode == 'test':
                 mask = (torch.arange(num_labels).view(-1, 1).repeat(1, batch_size).to(self.device) == (
                         correct_labels.view(1, -1).repeat(num_labels, 1) - min(self.labels)).to(self.device))
@@ -1268,11 +1279,11 @@ class GenerativeTrainer(Trainer):
             del inp_y, inp_d_a_m, inp_e_a_m
         del inp_x
 
+        
         pred = torch.tensor([self.labels[i] for i in pred])
         pred.to('cpu')
         if batch[2] is None:
             return pred
-
         correct_labels = correct_labels.to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
         # pdb.set_trace()
@@ -1585,6 +1596,7 @@ class DiscriminativeTrainer(Trainer):
         # check accuracy
         labels = labels.to('cpu')
         pred = torch.argmax(logits, dim=1).to('cpu')
+        # import pdb; pdb.set_trace()
 
         if self.save_results is not None:
             if not os.path.isfile(self.save_results + '.csv'):
@@ -1596,7 +1608,7 @@ class DiscriminativeTrainer(Trainer):
                     label = possible_labels[l]
                     f.write(f'{self.mnli_ids[self.index]},{label}\n')
                     self.index += 1
-
+        # pdb.set_trace()
         num_correct = torch.sum(labels == pred)
 
         loss_item = loss.item()
