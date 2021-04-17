@@ -116,6 +116,8 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         if 'gpt' not in model_name:
             args['is_decoder']=True
         res_model = AutoModelForCausalLM.from_pretrained(model_name, **args)
+        if 'gpt' in model_name:
+            res_model.config.pad_token_id = tokenizer.pad_token_id
 
     elif model == 'shared':
         if model_path is None:
@@ -139,8 +141,9 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         from transformers import AutoModelForSequenceClassification
         if model_path is None:
             res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels, return_dict=False)
+            if 'gpt' in model_name:
+                res_model.config.pad_token_id = tokenizer.pad_token_id
         else:
-            
             res_model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
     elif model == 'hybrid':

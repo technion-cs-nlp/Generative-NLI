@@ -117,7 +117,7 @@ class DiscriminativeDataset(Dataset):
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
                  non_discriminative_bias=False, seed=42, threshold=0.0, 
                  attribution_map=None, move_to_hypothesis=False, filt_method='true',
-                 attribution_tokenizer=None, possible_labels=None):
+                 attribution_tokenizer=None, possible_labels=None, rev=False):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         super().__init__()
@@ -149,7 +149,7 @@ class DiscriminativeDataset(Dataset):
                 self.tokenizer_attr = AutoTokenizer.from_pretrained(attribution_tokenizer)
         self.move_to_hypothesis = move_to_hypothesis
         self.filt_method = filt_method
-
+        self.rev = rev
         self.alpha = 0.25
 
     def _create_hist(self):
@@ -169,7 +169,7 @@ class DiscriminativeDataset(Dataset):
         if self.possible_labels is None:
             self.possible_labels = list(set(labels))
         self.possible_labels.sort()
-        res = [self.possible_labels.index(label) for label in labels]
+        res = [(self.possible_labels.index(l) if l in self.possible_labels else 0) for l in labels]
 
         return res
 
@@ -263,7 +263,8 @@ class DiscriminativeDataset(Dataset):
                     bias_str = self.tokenizer.decode(self.bias_ids[bias_idx]).replace(' ', '')
                     hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
                     hypothesis = ' '.join(hypothesis_splited)
-
+        if self.rev:
+            return hypothesis, premise, lbl
         return premise, hypothesis, lbl  # P, H, y
 
     def filter_premise(self, premise, hypothesis, filt, threshold):
@@ -330,7 +331,7 @@ class HypothesisOnlyDataset(Dataset):
             split = self.lines[index].split(self.sep)
 
             premise = split[0]
-            hypothesis = split[1].replace('\n', '')
+            hypothesis = split[1].replace('\n', '') if len(split)>1 else premise.strip()
             lbl = torch.tensor(self.labels[index])
         else:
             premise = self.lines[index]["evidence"]
@@ -374,7 +375,7 @@ class HypothesisOnlyDataset(Dataset):
 
                 
                 premise, hypothesis = self.filter_premise(premise, hypothesis, filt, threshold)
-
+                
         return (hypothesis, lbl) if not self.premise_only else (premise, lbl)
 
     def __len__(self):

@@ -38,8 +38,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    bs_train=16, bs_test=8, batches=0, epochs=20,
                    early_stopping=3, checkpoints=None, lr=1e-5, reg=1e-3, max_len=0, decoder_max_len=0,
                    optimizer_type='Adam', momentum=0.9, word_dropout=0.0, label_smoothing_epsilon=0.0,
-                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, rev=0.0, reduction='sum',
-                   hyp_only_model=None, hard_validation=False, merge_train=False, test_with_prior=False, sched=None,
+                   tie_embeddings=False, hypothesis_only=False, generate_hypothesis=False, reverse=False, reduction='sum',
+                   hyp_only_model=None, hard_validation=False, merge_train=False, test_with_prior=False, sched='linear',
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    gradual_unfreeze=False,
@@ -171,12 +171,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             test_labels + train_labels + val_labels + hard_test_labels))
     all_labels_text.sort()
     ratios = None
-    if calc_uniform:
-        ratios = [1/3,1/3,1/3]
-        # pdb.set_trace()
-        for i,l in enumerate(all_labels_text):
-            rate = len([sam for sam in train_labels if sam==l]) / len(train_labels)
-            ratios[i] = rate
+    # if calc_uniform:
+    #     ratios = [1/3,1/3,1/3]
+    #     # pdb.set_trace()
+    #     for i,l in enumerate(all_labels_text):
+    #         rate = len([sam for sam in train_labels if sam==l]) / len(train_labels)
+    #         ratios[i] = rate
     
     num_labels = len(all_labels_text)
     # import pdb; pdb.set_trace()
@@ -200,7 +200,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     dataset = None
     trainer_type = None
-    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text}
+    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse}
     dataloader_args = {}
     train_args = {'reduction': reduction, 'ratios':ratios}
 
@@ -251,7 +251,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             trainer_type = OnelabelTrainer
             train_args['label'] = label
 
-        train_args['rev'] = rev
+        # train_args['rev'] = rev
         train_args['possible_labels_ids'] = labels_ids
         train_args['epsilon'] = label_smoothing_epsilon
         train_args['tokenizer_encoder'] = tokenizer
@@ -335,7 +335,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                       tie_embeddings=tie_embeddings,
                       label=label,
                       gamma=gamma,
-                      tie_encoder_decoder=tie_encoder_decoder)
+                      tie_encoder_decoder=tie_encoder_decoder,
+                      num_labels=num_labels)
 
     # model.config.min_length = 5
     # model.config.max_length = 64
@@ -417,7 +418,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                checkpoints=None, max_len=0, decoder_max_len=0,
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
                label=None, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
-               reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False, premise_only=False, calc_uniform=False):
+               reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False,
+               premise_only=False, calc_uniform=False, reverse=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -504,7 +506,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         size_train = 10**8
         all_labels_text = list(set(
             # test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
-            test_labels + train_labels + val_labels + hard_test_labels))
+            train_labels# + test_labels + val_labels# + (hard_test_labels if hard_test_labels is not None else [])
+            ))
     all_labels_text.sort()  
     ratios = None
     # if calc_uniform:
@@ -530,7 +533,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     dataset = None
     trainer_type = None
     # pdb.set_trace()
-    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text}
+    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse}
     dataloader_args = {}
     train_args = {'reduction':reduction, 'ratios':ratios}
     hyp = None
@@ -601,7 +604,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         # ds_val = Subset(ds_val, range(batches * bs_test))
 
     model = get_model(tokenizer=tokenizer, tokenizer_decoder=tokenizer_decoder, model=model_type, model_name=model_name,
-                      decoder_model_name=decoder_model_name, model_path=model_path)
+                      decoder_model_name=decoder_model_name, model_path=model_path, num_labels=num_labels)
 
     model.to(device)
 
@@ -614,7 +617,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         writer = SummaryWriter()
 
     trainer = trainer_type(model, optimizer=None, scheduler=None, device=device, **train_args)
-    fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)
+    fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # fit_res = trainer.test(dl_train, checkpoints=checkpoints, writer=writer)#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_lines is not None:
         if hasattr(trainer, 'save_results') and trainer.save_results is not None:
@@ -698,6 +702,8 @@ def pipeline(run_name, hyp_only_model=None, model_name='facebook/bart-base', tra
         bs_test = 4
     if 'bart' in model_name:
         model_type = 'bart'
+    elif 'gpt' in model_name:
+        model_type = 'decoder-only'
     else:
         model_type = 'encode-decode'
     checkpoints = f'checkpoints/{run_name}'
@@ -878,14 +884,13 @@ def parse_cli():
     sp_exp.add_argument('--merge-train', dest='merge_train', action='store_true')
     sp_exp.add_argument('--label', '-l', type=int,
                         help='Create generative model only for one label', default=None)
-    sp_exp.add_argument('--rev', type=float,
-                        help='For hinge loss', default=0.0)
+    sp_exp.add_argument('--reverse' ,'-rev', dest='reverse', action='store_true', help='Generate hypothesis')
     sp_exp.add_argument('--tie-encoder-decoder', '-ted', dest='tie_encoder_decoder', action='store_true')
 
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
                         generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False,
                         hard_validation=False, merge_train=False, train_hyp=False, test_with_prior=False,premise_only=False,
-                        cheat=False, tie_encoder_decoder=False, calc_uniform=False)
+                        cheat=False, tie_encoder_decoder=False, calc_uniform=False, reverse=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -953,7 +958,8 @@ def parse_cli():
                         help='If you want to weigh loss by htpothesis only output', default=None)
     sp_test.add_argument('--test-with-prior', '-twp', dest='test_with_prior', action='store_true')
     sp_test.add_argument('--calc-uniform', '-cu', dest='calc_uniform', action='store_true')
-    sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False, calc_uniform=False)
+    sp_test.add_argument('--reverse' ,'-rev', dest='reverse', action='store_true', help='Generate hypothesis')
+    sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False, calc_uniform=False, reverse=False)
 
 
     # # Model

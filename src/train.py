@@ -19,7 +19,7 @@ from src.loss import LabelSmoothingCrossEntropy
 
 from transformers import GPT2Tokenizer
 
-
+temp =[0,0,0]
 return_acc = False
 mode = 'test'
 
@@ -250,7 +250,9 @@ class Trainer(abc.ABC):
                 # writer = saved_state.get('writer', writer)
                 actual_num_epochs = saved_state.get('ane', actual_num_epochs)
                 # print(f"Loading model from {model_filename}")
-                # self.model = AutoModel.from_pretrained(model_filename)
+                # from transformers import AutoModel, EncoderDecoderModel
+                # # self.model = AutoModel.from_pretrained(model_filename)
+                # self.model = EncoderDecoderModel.from_pretrained(model_filename)
                 # self.model.to(self.device)
         kw.pop('drive', None)
 
@@ -478,11 +480,15 @@ class Trainer(abc.ABC):
             pbar_file = open(os.devnull, 'w')
 
         pbar_name = forward_fn.__name__
+        skip=0
         with tqdm.tqdm(desc=pbar_name, total=num_batches,
                        file=pbar_file) as pbar:
             dl_iter = iter(dl)
             for batch_idx in range(num_batches):
                 data = next(dl_iter)
+                if len(data[0][0])>6000:
+                    skip+=1
+                    continue
                 if (batch_idx + 1) % eval_every == 0:
                     return_acc = True
                     num_eval_batches += 1
@@ -510,7 +516,7 @@ class Trainer(abc.ABC):
             # import pdb; pdb.set_trace()
 
             avg_loss = sum(losses) / num_batches
-            num = num_samples if eval_every == 1 or mode == 'test' else num_eval_batches * dl.batch_size
+            num = num_samples - skip if eval_every == 1 or mode == 'test' else num_eval_batches * dl.batch_size
             # num = num_samples if mode == 'test' else (num_samples / num_batches)
             accuracy = 100. * num_correct / num
             pbar.set_description(f'{pbar_name} '
@@ -799,6 +805,11 @@ class GenerativeTrainer(Trainer):
         num_correct = 0
         batch_size = x.shape[0]
 
+        if x[0, 1] in self.labels:
+            label_loc = 1
+        else:
+            label_loc = 0
+
         ## Needed because that gpt2 handles paddings differently
         mask = (attention_mask == 1)
         labels = x.clone() * mask + -100 * ~mask
@@ -827,14 +838,15 @@ class GenerativeTrainer(Trainer):
             loss += prior
 
         if self.gamma > 0.0:  ## Joint
-            min_label = min(self.labels)
+            model_kwargs.pop('input_ids',None)
             losses = [loss.clone()]
             for delta in range(1, len(self.labels)):
                 bad_x = x.clone().to(self.device)
                 # labels_tokens = ((bad_x[:, 1] - min_label + delta) % (len(self.labels))) + min_label # a very complicated way to change all the labels
-                labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, 1]])
-                bad_x[:, 1] = labels_tokens
-                bad_out = self.model(**model_kwargs)
+                # import pdb; pdb.set_trace()
+                labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, label_loc]])
+                bad_x[:, label_loc] = labels_tokens
+                bad_out = self.model(input_ids=bad_x, **model_kwargs)
                 bad_loss = bad_out[0]
                 bad_loss = bad_loss.view(batch_size, -1)
                 bad_loss = self._reduce(bad_loss, attention, reduction=self.reduction)
@@ -843,18 +855,17 @@ class GenerativeTrainer(Trainer):
                     bad_labels = (batch[2] + delta) % self.num_labels
                     batch_batch = (None, batch[1], bad_labels)
                     bad_prior = self.calc_disc_loss(batch_batch)
-                    bad_loss += bad_prior               
+                    bad_loss += bad_prior
 
                 losses.append(bad_loss)
 
             neg_log_prob = torch.stack(losses, 1)
             log_prob = -neg_log_prob
             log_sum_exp_losses = torch.logsumexp(log_prob, 1)
-            loss_obj = loss + self.gamma * log_sum_exp_losses
-            loss_obj = self._reduce(loss_obj, attention=None, reduction=self.reduction)
+            loss = loss + self.gamma * log_sum_exp_losses
         
         
-        loss_obj = self._reduce(loss, attention=None, reduction=self.reduction)
+        loss_obj = self._reduce(loss, attention=None, reduction='mean')
 
         # torch.cuda.empty_cache()
         if self.clip:
@@ -1228,12 +1239,12 @@ class GenerativeTrainer(Trainer):
             loss = loss.view(inp_x.size(0), -1)
             attention = attention[:, 1:] if loss.shape != attention.shape else attention
             loss = self._reduce(loss, attention=attention, reduction=self.reduction)
-            if self.ratios is not None and self.test_with_prior:
-                # import pdb; pdb.set_trace()
-                rate_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)
-                rates = torch.tensor([self.ratios[i] for i in rate_labels],device=self.device)
-                rates = -(rates).log()
-                loss = loss + rates
+            # if self.ratios is not None and self.test_with_prior:
+            #     # import pdb; pdb.set_trace()
+            #     rate_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)
+            #     rates = torch.tensor([self.ratios[i] for i in rate_labels],device=self.device)
+            #     rates = -(rates).log()
+            #     loss = loss + rates
             # import pdb; pdb.set_trace()
             if self.hyp_prior_model is not None and self.test_with_prior:
                 # pdb.set_trace()
@@ -1258,6 +1269,7 @@ class GenerativeTrainer(Trainer):
             #     loss = return_dict[0]+return_dict[1]
 
             ret = torch.min(loss.view(len(self.labels), -1), dim=0)
+            # pred = (ret.indices+(1 if mode=='test' else 0))%3 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             pred = ret.indices
             # import pdb; pdb.set_trace()
             if mode == 'test':
@@ -1297,6 +1309,10 @@ class GenerativeTrainer(Trainer):
                     label = label.replace('[', '').replace(']', '')
                     f.write(f'{self.mnli_ids[self.index]},{label}\n')
                     self.index += 1
+
+        # for i in pred:
+        #     temp[i-min(self.labels)]+=1
+        # print(temp)
 
         tot = total_loss.item()
 
@@ -1557,6 +1573,7 @@ class DiscriminativeTrainer(Trainer):
         # validate
         labels = labels.to('cpu')
         pred = torch.argmax(logits, dim=1).to('cpu')
+        # pdb.set_trace()
 
         num_correct = torch.sum(labels == pred)
 
@@ -1612,6 +1629,10 @@ class DiscriminativeTrainer(Trainer):
         num_correct = torch.sum(labels == pred)
 
         loss_item = loss.item()
+
+        # for i in pred:
+        #     temp[i]+=1
+        # print(temp)
 
         del loss
         return BatchResult(loss_item, num_correct.item())

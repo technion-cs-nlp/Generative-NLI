@@ -3,6 +3,13 @@
 checkpoints
 *.pyc
 data/*
+!data/snli_1.0/cl_snli_test*
+!data/snli_1.0/cl_snli_val*
+!data/snli_1.0/cl_snli_train_source*
+!data/snli_1.0/cl_snli_train_lbl*
+!data/fever
+!data/mnli
+data/attr*
 runs/*
 BPE/snli
 BPE/snli_train
