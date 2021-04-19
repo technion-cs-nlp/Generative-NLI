@@ -117,7 +117,7 @@ class DiscriminativeDataset(Dataset):
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
                  non_discriminative_bias=False, seed=42, threshold=0.0, 
                  attribution_map=None, move_to_hypothesis=False, filt_method='true',
-                 attribution_tokenizer=None, possible_labels=None, rev=False):
+                 attribution_tokenizer=None, possible_labels=None, rev=False, pure_gen=False):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         super().__init__()
@@ -151,6 +151,7 @@ class DiscriminativeDataset(Dataset):
         self.filt_method = filt_method
         self.rev = rev
         self.alpha = 0.25
+        self.pure_gen = pure_gen
 
     def _create_hist(self):
         hist = defaultdict(lambda: defaultdict(int))
@@ -265,6 +266,8 @@ class DiscriminativeDataset(Dataset):
                     hypothesis = ' '.join(hypothesis_splited)
         if self.rev:
             return hypothesis, premise, lbl
+        elif self.pure_gen:
+            return f'{premise}{self.tokenizer.sep_token}{hypothesis}', lbl
         return premise, hypothesis, lbl  # P, H, y
 
     def filter_premise(self, premise, hypothesis, filt, threshold):

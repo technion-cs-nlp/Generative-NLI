@@ -558,6 +558,14 @@ class GenerativeTrainer(Trainer):
         self.ratios = ratios
 
     def _prepare_batch(self, batch):
+        if len(batch)==2:
+            PH, labels = batch
+            PH, labels = list(PH), list(labels)
+            labels = torch.tensor([self.labels[l] for l in labels]).unsqueeze(-1)
+            dec_out = self.tokenizer_decoder.batch_encode_plus(PH, padding='longest', return_tensors='pt')
+            batch = labels, torch.ones_like(labels), \
+                dec_out['input_ids'].to(self.device), dec_out['attention_mask'].to(self.device)
+            return batch
         P, H, labels = batch[0:3]
         P, H, labels = list(P), list(H), list(labels)
         if labels is None:
@@ -663,7 +671,7 @@ class GenerativeTrainer(Trainer):
         num_correct = 0
         batch_size = x.shape[0]
 
-        if x[0, 1] in self.labels:
+        if x.size(1)>1 and x[0, 1] in self.labels:
             label_loc = 1
         else:
             label_loc = 0
@@ -1097,7 +1105,7 @@ class GenerativeTrainer(Trainer):
             inp_d_a_m = []
             if type(batch[0][0])!=tuple:
                 x, encoder_attention_mask, y, decoder_attention_mask = self._prepare_batch(batch)
-                if x[0, 1] in self.labels:
+                if x.size(1)>1 and x[0, 1] in self.labels:
                     label_loc = 1
                 else:
                     label_loc = 0
@@ -1294,8 +1302,8 @@ class GenerativeTrainer(Trainer):
         
         pred = torch.tensor([self.labels[i] for i in pred])
         pred.to('cpu')
-        if batch[2] is None:
-            return pred
+        # if batch[2] is None:
+            # return pred
         correct_labels = correct_labels.to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
         # pdb.set_trace()

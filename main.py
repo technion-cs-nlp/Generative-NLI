@@ -47,7 +47,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Dataset params
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
                    label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
-                   attribution_tokenizer=None, premise_only=False, cheat=False, calc_uniform=False):
+                   attribution_tokenizer=None, premise_only=False, cheat=False, calc_uniform=False, pure_gen=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -200,7 +200,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     dataset = None
     trainer_type = None
-    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse}
+    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
     dataloader_args = {}
     train_args = {'reduction': reduction, 'ratios':ratios}
 
@@ -406,7 +406,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         print('_'*50)
         test_model(run_name, out_dir+"_test", data_dir_prefix, model_name, checkpoints+"_model", model_type, decoder_model_name, seed, None,
                     bs_test, batches, None, 0, 0, hypothesis_only, False, False, label, attribution_map,
-                    move_to_hypothesis, hyp_only_model, threshold, reduction, filt_method)
+                    move_to_hypothesis, hyp_only_model, threshold, reduction, filt_method, attribution_tokenizer=attribution_tokenizer, test_with_prior=test_with_prior,
+                    premise_only=premise_only, calc_uniform=calc_uniform, reverse=reverse, pure_gen=pure_gen)
 
 
 
@@ -419,7 +420,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
                label=None, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
                reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False,
-               premise_only=False, calc_uniform=False, reverse=False):
+               premise_only=False, calc_uniform=False, reverse=False, pure_gen=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -533,7 +534,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     dataset = None
     trainer_type = None
     # pdb.set_trace()
-    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse}
+    data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
     dataloader_args = {}
     train_args = {'reduction':reduction, 'ratios':ratios}
     hyp = None
@@ -613,8 +614,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     dl_train = torch.utils.data.DataLoader(ds_train, bs_test, shuffle=False, **dataloader_args)
 
     writer = None
-    if checkpoints is None:
-        writer = SummaryWriter()
+    # if checkpoints is None:
+    #     writer = SummaryWriter()
 
     trainer = trainer_type(model, optimizer=None, scheduler=None, device=device, **train_args)
     fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -817,13 +818,16 @@ def parse_cli():
     sp_exp.add_argument('--bias-location', type=str,
                         help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
                         default='start')
-    sp_exp.add_argument('--non-discriminative-bias', '-ndb', dest='non_discriminative_bias', action='store_true')
+    sp_exp.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative', 
+                        dest='non_discriminative_bias', action='store_true')
     sp_exp.add_argument('--attribution-map', '-am', type=str, 
                         help='path of attribution maps folder',
                         default=None)
     sp_exp.add_argument('--filt-method', '-fm', type=str, 
+                        help='The method to filter the premis by. Should be in [sum,mean,max,max-abs,min-abs,true,rand',
                         default='none')
-    sp_exp.add_argument('--move-to-hypothesis', '-mth', dest='move_to_hypothesis', action='store_true')
+    sp_exp.add_argument('--move-to-hypothesis', '-mth', help='Move the filtered words from the premise to the hypothesis', 
+                        dest='move_to_hypothesis', action='store_true')
 
     # # Training
     sp_exp.add_argument('--bs-train', type=int, help='Train batch size',
@@ -886,11 +890,12 @@ def parse_cli():
                         help='Create generative model only for one label', default=None)
     sp_exp.add_argument('--reverse' ,'-rev', dest='reverse', action='store_true', help='Generate hypothesis')
     sp_exp.add_argument('--tie-encoder-decoder', '-ted', dest='tie_encoder_decoder', action='store_true')
+    sp_exp.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
 
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
                         generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False,
                         hard_validation=False, merge_train=False, train_hyp=False, test_with_prior=False,premise_only=False,
-                        cheat=False, tie_encoder_decoder=False, calc_uniform=False, reverse=False)
+                        cheat=False, tie_encoder_decoder=False, calc_uniform=False, reverse=False, pure_gen=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,
@@ -977,8 +982,9 @@ def parse_cli():
                          help='Create generative model only for one label', default=None)
     sp_test.add_argument('--hypothesis-only', '-ho', dest='hypothesis_only', action='store_true')
     sp_test.add_argument('--premise-only', '-po', dest='premise_only', action='store_true')
+    sp_test.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
     sp_test.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
-    sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False)
+    sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False, pure_gen=False)
 
     sp_comb = sp.add_parser('generate', help='Generate new dataset')
     sp_comb.set_defaults(subcmd_fn=generate_dataset)
