@@ -322,11 +322,11 @@ class HypothesisOnlyDataset(Dataset):
 
 
     def _labels_to_idx(self, labels):
+        # import pdb;pdb.set_trace()
         if self.possible_labels is None:
             self.possible_labels = list(set(labels))
         self.possible_labels.sort()
-        res = [self.possible_labels.index(label) for label in labels]
-
+        res = [(self.possible_labels.index(l) if l in self.possible_labels else 0) for l in labels]
         return res
 
     def __getitem__(self, index):

@@ -385,7 +385,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     elif 'warmup' in sched.lower():
         scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=num_batches)
     elif 'cosine' in sched.lower():
-        scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=num_batches,
+        scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=num_batches,
                                                 num_training_steps=num_steps)
     writer = SummaryWriter()
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
@@ -1039,6 +1039,8 @@ def parse_cli():
 # run_experiment("dimi", data_dir_prefix="../data/scitail/cl_scitail", bs_train=8, bs_test=4)
 
 if __name__ == '__main__':
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     torch.cuda.empty_cache()
     parsed_args = parse_cli()
     subcmd_fn = parsed_args.subcmd_fn
