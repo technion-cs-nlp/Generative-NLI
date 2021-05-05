@@ -740,14 +740,6 @@ class GenerativeTrainer(Trainer):
             neg_log_prob = torch.stack(losses, 1)
             log_prob = -neg_log_prob
             log_sum_exp_losses = torch.logsumexp(log_prob, 1)
-            if False:
-                pass
-                # neg_log_sum_exp_losses = -log_sum_exp_losses
-                # # if (neg_log_sum_exp_losses<0).any().item():
-                # #     import pdb; pdb.set_trace()
-                # neg_log_sum_exp_losses[neg_log_sum_exp_losses<=0] = 0.0
-                # disc_loss = (loss + prior) - neg_log_sum_exp_losses       ##  log (p(P|y,H)p(y|H) / p(P|H))
-                # loss_obj = (1-self.gamma) * loss + self.gamma * disc_loss   #==(1-self.gamma) * loss + self.gamma * disc_loss
             loss = loss + self.gamma * log_sum_exp_losses
             # loss = self._reduce(loss, attention=None, reduction=self.reduction)
 
@@ -850,15 +842,12 @@ class GenerativeTrainer(Trainer):
             losses = [loss.clone()]
             for delta in range(1, len(self.labels)):
                 bad_x = x.clone().to(self.device)
-                # labels_tokens = ((bad_x[:, 1] - min_label + delta) % (len(self.labels))) + min_label # a very complicated way to change all the labels
-                # import pdb; pdb.set_trace()
                 labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, label_loc]])
                 bad_x[:, label_loc] = labels_tokens
                 bad_out = self.model(input_ids=bad_x, **model_kwargs)
                 bad_loss = bad_out[0]
                 bad_loss = bad_loss.view(batch_size, -1)
                 bad_loss = self._reduce(bad_loss, attention, reduction=self.reduction)
-                # import pdb; pdb.set_trace()
                 if self.hyp_prior_model is not None:
                     bad_labels = (batch[2] + delta) % self.num_labels
                     batch_batch = (None, batch[1], bad_labels)
@@ -1241,57 +1230,32 @@ class GenerativeTrainer(Trainer):
         num_labels = len(self.labels)
 
         with torch.no_grad():
-            # if not hasattr(self, 'hyp_prior_model') or self.model.device == self.hyp_prior_model.device:
             outputs = self.model(**model_kwargs)
             loss = outputs[0]
             loss = loss.view(inp_x.size(0), -1)
             attention = attention[:, 1:] if loss.shape != attention.shape else attention
             loss = self._reduce(loss, attention=attention, reduction=self.reduction)
-            # if self.ratios is not None and self.test_with_prior:
-            #     # import pdb; pdb.set_trace()
-            #     rate_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)
-            #     rates = torch.tensor([self.ratios[i] for i in rate_labels],device=self.device)
-            #     rates = -(rates).log()
-            #     loss = loss + rates
-            # import pdb; pdb.set_trace()
             if self.hyp_prior_model is not None and self.test_with_prior:
                 # pdb.set_trace()
                 test_labels = torch.arange(self.num_labels).repeat(batch_size,1).T.reshape(-1)  # (0,...,0,1,...,1,2,...,2)
                 hyp_batch_test = (None, batch[1]*3, test_labels)
                 prior = self.calc_disc_loss(hyp_batch_test)
                 loss += prior
-            # else:
-            #     ## If we have multi-gpus
-            #     from multiprocessing import Process, Manager
-            #     manager = Manager()
-            #     return_dict = manager.dict()
-            #     jobs = []
-            #     p_gen = Process(target=gen_loss, args=(0, return_dict, self.model, model_kwargs, inp_x, attention, self._reduce, self.reduction))
-            #     jobs.append(p_gen)
-            #     p_gen.start()
-            #     p_hyp = Process(target=hyp_loss, args=(1, return_dict, self.num_labels, batch_size, batch, self.calc_disc_loss))
-            #     jobs.append(p_hyp)
-            #     p_hyp.start()
-            #     for p in jobs:
-            #         p.join()
-            #     loss = return_dict[0]+return_dict[1]
 
             ret = torch.min(loss.view(len(self.labels), -1), dim=0)
-            # pred = (ret.indices+(1 if mode=='test' else 0))%3 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             pred = ret.indices
-            # import pdb; pdb.set_trace()
             if mode == 'test':
-                mask = (torch.arange(num_labels).view(-1, 1).repeat(1, batch_size).to(self.device) == (
-                        correct_labels.view(1, -1).repeat(num_labels, 1) - min(self.labels)).to(self.device))
-                loss = loss.view(num_labels, -1)
-                total_loss = (loss * mask.to(self.device)).sum(0)
+                # mask = (torch.arange(num_labels).view(-1, 1).repeat(1, batch_size).to(self.device) == (
+                #         correct_labels.view(1, -1).repeat(num_labels, 1) - min(self.labels)).to(self.device))
+                # loss = loss.view(num_labels, -1)
+                # total_loss = (loss * mask.to(self.device)).sum(0)
+                total_loss = ret.values
                 if self.gamma > 0.0:
                     total_loss += self.gamma * torch.logsumexp(-loss, 0)
             else:
                 total_loss = torch.tensor(0.0,dtype=torch.float)
 
             total_loss = total_loss.mean()
-            # import pdb; pdb.set_trace()
             pass
         if self.decoder_only:
             del inp_a_m, inp_t_t
