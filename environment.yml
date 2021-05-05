@@ -37,5 +37,4 @@ dependencies:
     - google-cloud-translate
     - rouge-score
     - annoy
-    - transformers
     - datasets
