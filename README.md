@@ -6,7 +6,7 @@ Use `enviorment.yml` file with conda to install neccecery modules:
  conda env update -f environment.yml
 ```
 
-Then, clone and install this fork of `Huggingface` according to the instruction in this git <https://github.com/dimi1357/transformers.git>.
+Then, clone and install this fork of `Huggingface` according to the instruction in this git: <https://github.com/dimi1357/transformers.git>.
 
 Availble commands (python main.py -h to see this menu)
 
@@ -26,7 +26,23 @@ positional arguments:
 
 Quick examples:
 
-TBD
+Train generative BART model on SNLI:
+
+```
+python -n NAME --checkpoints <path to checkpoints> --model type bart --model-name facebook/bart-base --data-dir-prefix data/snli_1.0/cl_snli
+```
+
+Train discriminative BART model on MNLI:
+
+```
+python -n NAME --checkpoints <path to checkpoints> --model type disc --model-name facebook/bart-base --data-dir-prefix data/mnli/cl_multinli
+```
+
+Train hypothesis-only BERT model on MNLI:
+
+```
+python -n NAME --checkpoints <path to checkpoints> --model type disc -ho --model-name bert-base-uncased --data-dir-prefix data/mnli/cl_multinli
+```
 
 Full list of arguments:
 
