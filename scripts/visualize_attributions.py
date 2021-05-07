@@ -5,7 +5,7 @@ import numpy as np
 from collections import defaultdict
 
 if not os.path.isfile("stats.torch"):
-    attribution_map = 'attributions_weighted'
+    attribution_map = 'attributions/attributions_bart_base_true'
     attribution_paths = [None] * 4
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     data_dir_prefix='./data/snli_1.0/cl_snli'
@@ -17,6 +17,9 @@ if not os.path.isfile("stats.torch"):
     files = [f for f in os.listdir(attribution_map) if os.path.isfile(os.path.join(attribution_map, f))]
     # for i,prefix in enumerate(["train_set","val_set","test_set","hard_test_set"]):
     for i,prefix in enumerate(["train_set","val_set","test_set","hard_test_set"]):
+        if prefix != 'test_set':
+            attribution_paths[i] = None
+            continue
         f = list(filter(lambda f: f.startswith(prefix), files))
         if len(f)>0:
             path_ = os.path.join(attribution_map, f[0])
@@ -46,7 +49,7 @@ if not os.path.isfile("stats.torch"):
     # dataset = DiscriminativeDataset
     # tokenizer = None
     # max_len = 0
-    tokenizer_attr = AutoTokenizer.from_pretrained('bert-base-uncased')
+    tokenizer_attr = AutoTokenizer.from_pretrained('facebook/bart-base')
 
     res = {}
     word_dic = {}
@@ -54,6 +57,8 @@ if not os.path.isfile("stats.torch"):
     possible_labels = ['contradiction', 'entailment', 'neutral']
 
     for check_lines, name in zip([train_lines, val_lines, test_lines, hard_test_lines], ['train','val','test','hard_test']):
+        if name != 'test':
+            continue
         with open(f'data/snli_1.0/attr_{name}_source_file','w') as source_file:
             with open(f'data/snli_1.0/attr_{name}_lbl_file','w') as lbl_file:
 
@@ -78,41 +83,44 @@ if not os.path.isfile("stats.torch"):
                         
                         premise_encoded = tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
                         premise_len = len(premise_encoded)
-                        for label in range(3):
-                            if attribution_map[index] is None or None in attribution_map[index]:
-                                premise_attr = torch.ones_like(premise_encoded)
-                            # elif not type(attribution_map[index]) == list:
-                            #     premise_attr = attribution_map[index].view(-1)[:premise_len]
-                            else:
-                                premise_attr = attribution_map[index][label].view(-1)[:premise_len]
+                        # for label in range(3):
+                        #     if attribution_map[index] is None or None in attribution_map[index]:
+                        #         premise_attr = torch.ones_like(premise_encoded)
+                        #     # elif not type(attribution_map[index]) == list:
+                        #     #     premise_attr = attribution_map[index].view(-1)[:premise_len]
+                        #     else:
+                        #         premise_attr = attribution_map[index][label].view(-1)[:premise_len]
 
-                            mask = premise_attr >= 0
+                        #     mask = premise_attr >= 0
+                        #     premise_encoded_filtered = premise_encoded[mask]
+                        #     premise_filtered = tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
+                        #     source_file.write(f'{premise_filtered}|||{hypothesis}\n')
+                        #     lbl_file.write(f'{possible_labels[label]}\n')
+                        premise_attr = attribution_map[index].view(-1)[:premise_len]
+                        # import pdb; pdb.set_trace()
+
+                        for threshold in np.arange(-1.0,1.1,0.1):
+                            pass
+                            threshold = round(threshold,2)
+                            # if threshold == -1.0:
+                            #     # import pdb; pdb.set_trace()
+                            #     pass
+                            mask = premise_attr >= threshold
                             premise_encoded_filtered = premise_encoded[mask]
                             premise_filtered = tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
-                            source_file.write(f'{premise_filtered}|||{hypothesis}\n')
-                            lbl_file.write(f'{possible_labels[label]}\n')
-                        for threshold in np.arange(0.0,1.05,0.05):
-                            pass
-                            # threshold = round(threshold,2)
-                            # # if threshold == -1.0:
-                            # #     # import pdb; pdb.set_trace()
-                            # #     pass
-                            # mask = premise_attr >= threshold
-                            # premise_encoded_filtered = premise_encoded[mask]
-                            # premise_filtered = tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
-                            # word_filtered = premise_len - len(premise_encoded_filtered)
-                            # ratio_filtered = float(word_filtered) / premise_len
-                            # res[name]['count'][threshold] += word_filtered / num_lines
-                            # res[name]['ratio'][threshold] += ratio_filtered / num_lines
+                            word_filtered = premise_len - len(premise_encoded_filtered)
+                            ratio_filtered = float(word_filtered) / premise_len
+                            res[name]['count'][threshold] += word_filtered / num_lines
+                            res[name]['ratio'][threshold] += ratio_filtered / num_lines
 
-                            # premise_attr_normal = premise_attr / premise_attr.sum()
-                            # mask = premise_attr_normal >= threshold
-                            # premise_encoded_filtered = premise_encoded[mask]
-                            # premise_filtered = tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
-                            # word_filtered_normal = premise_len - len(premise_encoded_filtered)
-                            # ratio_filtered_normal = float(word_filtered_normal) / premise_len
-                            # res[name]['count_normal'][threshold] += word_filtered_normal / num_lines
-                            # res[name]['ratio_normal'][threshold] += ratio_filtered_normal / num_lines
+                            premise_attr_normal = premise_attr / premise_attr.sum()
+                            mask = premise_attr_normal >= threshold
+                            premise_encoded_filtered = premise_encoded[mask]
+                            premise_filtered = tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
+                            word_filtered_normal = premise_len - len(premise_encoded_filtered)
+                            ratio_filtered_normal = float(word_filtered_normal) / premise_len
+                            res[name]['count_normal'][threshold] += word_filtered_normal / num_lines
+                            res[name]['ratio_normal'][threshold] += ratio_filtered_normal / num_lines
                 
                         # for i in range(premise_len):
                         #     word_dic[name][premise_encoded[i]] = 
@@ -129,8 +137,10 @@ import matplotlib.pyplot as plt
 
 fig, axs = plt.subplots(4, 2)
 
-plt.setp(axs, xticks=list(dic['train']['ratio'].keys()))
+plt.setp(axs, xticks=list(dic['test']['ratio'].keys()))
 for i,name in enumerate(['train','val','test','hard_test']):
+    if name != 'test':
+        continue
     for j,(group,color) in enumerate(zip(['ratio','ratio_normal'],['tab:blue','tab:red'])):
         axs[i, j].plot(list(dic[name][group].keys()), list(dic[name][group].values()), color)
         axs[i, j].set_title(f'{name}-{group}')
@@ -149,3 +159,7 @@ for ax in axs.flat:
 figure = plt.gcf()
 figure.set_size_inches(10, 16)
 plt.savefig('thres.png')
+plt.clf()
+
+import pdb; pdb.set_trace()
+pass

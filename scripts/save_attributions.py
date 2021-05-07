@@ -23,12 +23,12 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 model_name = 'facebook/bart-base'
 # # model_path = 'checkpoints/exp_b2b_mnli_disc_model'
-model_path = 'checkpoints/exp_bart_b_mnli_disc_model'
+# model_path = 'checkpoints/exp_bart_b_mnli_disc_model'
 # model_name = 'facebook/bart-base'
-# model_path = 'checkpoints/exp_bart_b_disc_model'
-prefix = 'mnli_bart_base'
-labels_type = 'pred'
-name = "hard_test_set"
+model_path = 'checkpoints/exp_bart_b_disc_model'
+prefix = 'bart_base'
+labels_type = 'true'
+name = "test_set"
 
 # load model
 model = AutoModelForSequenceClassification.from_pretrained(model_path, return_dict=False)

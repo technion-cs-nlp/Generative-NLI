@@ -19,7 +19,7 @@ from transformers import AutoTokenizer, AdamW, AutoModel, \
 
 from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
 from src.models import get_model, HybridModel
-from src.train import GenerativeTrainer, DiscriminativeTrainer, OnelabelTrainer, HybridTrainer
+from src.train import GenerativeTrainer, DiscriminativeTrainer, OnelabelTrainer
 from src.utils import FitResult, get_max_len
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -420,7 +420,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                hypothesis_only=False, generate_hypothesis=False, create_premises=False,
                label=None, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
                reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False,
-               premise_only=False, calc_uniform=False, reverse=False, pure_gen=False):
+               premise_only=False, calc_uniform=False, reverse=False, pure_gen=False,
+               inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
+               save_likelihoods=None):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -450,8 +452,16 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if save_results is not None:
         test_str = ('test_matched_unlabeled' if 'mnli' in data_dir_prefix else 'test')
     else:
-        test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
+        if 'hans' in data_dir_prefix:
+            test_str = ''
+        else:
+            test_str = ('dev_mismatched' if 'mnli' in data_dir_prefix else 'test')
     val_str = ('dev_matched' if 'mnli' in data_dir_prefix else 'val')
+
+    train_labels = []
+    train_lines = []
+    val_labels = []
+    val_lines = []
 
     if data_dir_prefix == 'fever':
         from src.data_miki.datasets import load_dataset_aux
@@ -467,18 +477,21 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         hard_test_lines = fever_testv2['test']
         hard_test_labels = None
     else:
-        with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
+        # pdb.set_trace()
+        with open(data_dir_prefix + f'_{test_str}{"_" if test_str!="" else ""}lbl_file') as test_labels_file:
             test_labels = test_labels_file.readlines()
-        with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
+        with open(data_dir_prefix + f'_{test_str}{"_" if test_str!="" else ""}source_file') as test_lines_file:
             test_lines = test_lines_file.readlines()
-        with open(data_dir_prefix + f'_train_lbl_file') as train_labels_file:
-            train_labels = train_labels_file.readlines()
-        with open(data_dir_prefix + f'_train_source_file') as train_lines_file:
-            train_lines = train_lines_file.readlines()
-        with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
-            val_labels = val_labels_file.readlines()
-        with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
-            val_lines = val_lines_file.readlines()
+        if os.path.isfile(data_dir_prefix + f'_train_lbl_file'):
+            with open(data_dir_prefix + f'_train_lbl_file') as train_labels_file:
+                train_labels = train_labels_file.readlines()
+            with open(data_dir_prefix + f'_train_source_file') as train_lines_file:
+                train_lines = train_lines_file.readlines()
+        if os.path.isfile(data_dir_prefix + f'_{val_str}_lbl_file'):
+            with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
+                val_labels = val_labels_file.readlines()
+            with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
+                val_lines = val_lines_file.readlines()
         if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
                 os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
             with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
@@ -507,7 +520,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         size_train = 10**8
         all_labels_text = list(set(
             # test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
-            train_labels# + test_labels + val_labels# + (hard_test_labels if hard_test_labels is not None else [])
+            train_labels + test_labels + val_labels# + (hard_test_labels if hard_test_labels is not None else [])
             ))
     all_labels_text.sort()  
     ratios = None
@@ -536,7 +549,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     # pdb.set_trace()
     data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
     dataloader_args = {}
-    train_args = {'reduction':reduction, 'ratios':ratios}
+    train_args = {'reduction':reduction, 'ratios':ratios, 'save_likelihoods':save_likelihoods}
     hyp = None
     if hyp_only_model is not None:
         if os.path.isdir(hyp_only_model):
@@ -592,12 +605,22 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         data_args['attribution_map'] = attribution_paths[0]
     if 'mnli' in data_dir_prefix:
         train_args['mnli_ids_path'] = 'other/mnli_ids.csv'
+
+    data_dict = {
+        'inject_bias': inject_bias,
+        'bias_ids': bias_ids,
+        'bias_ratio': bias_ratio,
+        'bias_location': bias_location,
+        'non_discriminative_bias': non_discriminative_bias,
+    }
+    data_args.update(data_dict)
+
     ds_test = dataset(test_lines, test_labels, tokenizer, **data_args)
 
     data_args.pop('mnli_ids_path',None)
     data_args.pop('attribution_map',None)
     ds_val = dataset(val_lines, val_labels, tokenizer, **data_args)
-
+    
     ds_train = dataset(train_lines, train_labels, tokenizer, **data_args)
 
     if batches > 0:
@@ -624,6 +647,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if hard_test_lines is not None:
         if hasattr(trainer, 'save_results') and trainer.save_results is not None:
             trainer.save_results += '_hard'
+        if hasattr(trainer, 'save_likelihoods') and trainer.save_likelihoods is not None:
+            trainer.save_likelihoods += '_hard'
         if attribution_map is not None:
             data_args['attribution_map'] = attribution_paths[1]
         if 'mnli' in data_dir_prefix and save_results is not None:
@@ -644,7 +669,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
 
 def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
-                   model_path=None, model_name='sshleifer/distilbart-cnn-12-6', model_type='bart', save_results=None,
+                   model_path=None, model_name='sshleifer/distilbart-cnn-12-6', model_type='bart', save_results=None, generate_all_labels=False,
                    ## generation params
                 #    beam_size=4, max_length=32, early_stopping=True,
                    ):
@@ -652,7 +677,7 @@ def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
     if save_results is None:
         save_results = data_dir_prefix + '_generated'
     else:
-        save_results = data_dir_prefix + '_' +save_results
+        save_results = save_results
 
     if os.path.isfile(save_results+'_lbl_file'):
         raise argparse.ArgumentError(f"File {save_results} Already exist!")
@@ -689,7 +714,7 @@ def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
     dataloader = torch.utils.data.DataLoader(dataset, bs_test, shuffle=False)
 
     trainer = GenerativeTrainer(model=model, optimizer=None, scheduler=None, possible_labels_ids=labels_ids, 
-                                tokenizer_encoder=tokenizer, save_results=save_results, device=device)
+                                tokenizer_encoder=tokenizer, save_results=save_results, device=device, generate_all_labels=generate_all_labels)
     trainer.generate_dataset(dataloader)
 
 
@@ -751,7 +776,7 @@ def pipeline(run_name, hyp_only_model=None, model_name='facebook/bart-base', tra
     run_experiment(ft_run_name, data_dir_prefix=data_dir_prefix, bs_train=bs_train, bs_test=bs_test, model_name=model_name, 
     model_type=model_type, model_path=model_path, seed=seed, checkpoints=ft_checkpoints, lr=ft_lr, word_dropout=word_dropout, 
     hyp_only_model=hyp_only_model, hard_validation=hard_validation, weight_decay=weight_decay, attribution_map=attribution_map, 
-    gamma=1.0, test_with_prior=test_with_prior)
+    gamma=1.0, test_with_prior=test_with_prior, epochs=5)
     ft_model_path = f'{ft_checkpoints}_model'
 
     print("********************** Testing fine-tuned model **********************")
@@ -964,7 +989,21 @@ def parse_cli():
     sp_test.add_argument('--test-with-prior', '-twp', dest='test_with_prior', action='store_true')
     sp_test.add_argument('--calc-uniform', '-cu', dest='calc_uniform', action='store_true')
     sp_test.add_argument('--reverse' ,'-rev', dest='reverse', action='store_true', help='Generate hypothesis')
-    sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False, calc_uniform=False, reverse=False)
+    sp_test.add_argument('--inject-bias', type=int,
+                        help='Select number of labels to inject bias to their corresponding hypotheses',
+                        default=0)
+    sp_test.add_argument('--bias-ids', type=int, nargs='+', help='Select the ids of the biases symbols',
+                        default=[30000, 30001, 30002])
+    sp_test.add_argument('--bias-ratio', type=float,
+                        help='Select the percentege of labels to inject bias to their corresponding hypotheses',
+                        default=0.5)
+    sp_test.add_argument('--bias-location', type=str,
+                        help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
+                        default='start')
+    sp_test.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative', 
+                        dest='non_discriminative_bias', action='store_true')
+    sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False, calc_uniform=False, reverse=False,
+                        non_discriminative_bias=False)
 
 
     # # Model
@@ -985,21 +1024,24 @@ def parse_cli():
     sp_test.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
     sp_test.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
     sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False, pure_gen=False)
-
-    sp_comb = sp.add_parser('generate', help='Generate new dataset')
-    sp_comb.set_defaults(subcmd_fn=generate_dataset)
-    sp_comb.add_argument('--data-dir-prefix', type=str,
-                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli_train')
-    sp_comb.add_argument('--model-path', '-mp', type=str,
-                         help='Path of the first model', required=True)
-    sp_comb.add_argument('--model-type', '-mt', type=str,
-                         help='Type of the first model', default='bart')
-    sp_comb.add_argument('--model-name', '-mn', type=str,
-                         help='Name of the first model', default='sshleifer/distilbart-cnn-12-6')
-    sp_comb.add_argument('--bs-test', '-bst', type=int,
-                         help='Test batch size', default=8)
-    sp_comb.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
+    sp_test.add_argument('--save-likelihoods', '-sl', type=str, help='Pass path if you want to save the likelihoods as a torch tensor',
                          default=None, required=False)
+
+    sp_gen = sp.add_parser('generate', help='Generate new dataset')
+    sp_gen.set_defaults(subcmd_fn=generate_dataset)
+    sp_gen.add_argument('--data-dir-prefix', type=str,
+                         help='Prefix of the path to data', default='./data/snli_1.0/cl_snli_train')
+    sp_gen.add_argument('--model-path', '-mp', type=str,
+                         help='Path of the first model', required=True)
+    sp_gen.add_argument('--model-type', '-mt', type=str,
+                         help='Type of the first model', default='bart')
+    sp_gen.add_argument('--model-name', '-mn', type=str,
+                         help='Name of the first model', default='sshleifer/distilbart-cnn-12-6')
+    sp_gen.add_argument('--bs-test', '-bst', type=int,
+                         help='Test batch size', default=8)
+    sp_gen.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
+                         default=None, required=False)
+    sp_gen.add_argument('--generate-all-labels', '-gal', dest='generate_all_labels', action='store_true', help='Generate premises for all the labels and not just for gold labels')
 
     # Experiment config
     sp_pip = sp.add_parser('pipeline', help='Pipeline')

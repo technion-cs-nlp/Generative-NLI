@@ -126,7 +126,8 @@ class Trainer(abc.ABC):
     - Single batch (train_batch/test_batch)
     """
 
-    def __init__(self, model, loss_fn, optimizer, scheduler, device='cpu', gradual_unfreeze=False, ):
+    def __init__(self, model, loss_fn, optimizer, scheduler, device='cpu', gradual_unfreeze=False, 
+                    save_likelihoods=None):
         """
         Initialize the trainer.
         :param model: Instance of the model to train.
@@ -146,6 +147,9 @@ class Trainer(abc.ABC):
         self.test_every = 1000
         self.index = 0
         # model.to(self.device)
+        self.save_likelihoods = save_likelihoods 
+        if self.save_likelihoods is not None:
+            self.likelihoods = []
 
     @staticmethod
     def _loss_mean(loss, attention):
@@ -398,6 +402,10 @@ class Trainer(abc.ABC):
         if post_epoch_fn:
             post_epoch_fn(0, EpochResult([0], 0), test_result, verbose)
 
+        if self.save_likelihoods is not None:
+            torch.save(torch.cat(self.likelihoods), f'{self.save_likelihoods}.torch')
+            self.likelihoods = []
+
         return FitResult(0,
                          0, 0, test_loss, test_acc)
 
@@ -486,9 +494,9 @@ class Trainer(abc.ABC):
             dl_iter = iter(dl)
             for batch_idx in range(num_batches):
                 data = next(dl_iter)
-                if len(data[0][0])>6000:
-                    skip+=1
-                    continue
+                # if len(data[0][0])>6000:
+                #     skip+=1
+                #     continue
                 if (batch_idx + 1) % eval_every == 0:
                     return_acc = True
                     num_eval_batches += 1
@@ -531,8 +539,9 @@ class GenerativeTrainer(Trainer):
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
                  create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
                  rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
-                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, device=None, ratios=None, **kwargs):
-        super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze)
+                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, device=None, ratios=None, 
+                 save_likelihoods=None, generate_all_labels=False, **kwargs):
+        super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze, save_likelihoods=save_likelihoods)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
         self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
@@ -556,6 +565,7 @@ class GenerativeTrainer(Trainer):
         self.decoder_only = decoder_only
         self.test_with_prior = test_with_prior
         self.ratios = ratios
+        self.generate_all_labels = generate_all_labels
 
     def _prepare_batch(self, batch):
         if len(batch)==2:
@@ -1245,11 +1255,11 @@ class GenerativeTrainer(Trainer):
             ret = torch.min(loss.view(len(self.labels), -1), dim=0)
             pred = ret.indices
             if mode == 'test':
-                # mask = (torch.arange(num_labels).view(-1, 1).repeat(1, batch_size).to(self.device) == (
-                #         correct_labels.view(1, -1).repeat(num_labels, 1) - min(self.labels)).to(self.device))
-                # loss = loss.view(num_labels, -1)
-                # total_loss = (loss * mask.to(self.device)).sum(0)
-                total_loss = ret.values
+                mask = (torch.arange(num_labels).view(-1, 1).repeat(1, batch_size).to(self.device) == (
+                        correct_labels.view(1, -1).repeat(num_labels, 1) - min(self.labels)).to(self.device))
+                loss = loss.view(num_labels, -1)
+                total_loss = (loss * mask.to(self.device)).sum(0)
+                # total_loss = ret.values
                 if self.gamma > 0.0:
                     total_loss += self.gamma * torch.logsumexp(-loss, 0)
             else:
@@ -1281,6 +1291,11 @@ class GenerativeTrainer(Trainer):
                     label = label.replace('[', '').replace(']', '')
                     f.write(f'{self.mnli_ids[self.index]},{label}\n')
                     self.index += 1
+        # pdb.set_trace()
+        if self.save_likelihoods is not None:
+            true_labels_loss = ((loss-(-(-loss).logsumexp(0)))* mask.to(self.device)).sum(0)
+            # for l in true_labels_loss:
+            self.likelihoods.append(true_labels_loss)
 
         # for i in pred:
         #     temp[i-min(self.labels)]+=1
@@ -1304,24 +1319,28 @@ class GenerativeTrainer(Trainer):
             label_loc = 1
         else:
             label_loc = 0
+        # pdb.set_trace()
+        if self.generate_all_labels:
+            for label_id in self.labels:
+                curr_x = x.clone()
+                curr_x[:, label_loc] = label_id
+                inp_x.append(curr_x)
+                inp_e_a_m.append(encoder_attention_mask)
 
-        for label_id in self.labels:
-            curr_x = x.clone()
-            curr_x[:, label_loc] = label_id
-            inp_x.append(curr_x)
-            inp_e_a_m.append(encoder_attention_mask)
+            inp_x = torch.cat(inp_x)
+            inp_e_a_m = torch.cat(inp_e_a_m)
 
-        inp_x = torch.cat(inp_x)
-        inp_e_a_m = torch.cat(inp_e_a_m)
-
-        inp_x = inp_x.to(self.device)
-        inp_e_a_m = inp_e_a_m.to(self.device)
+            inp_x = inp_x.to(self.device)
+            inp_e_a_m = inp_e_a_m.to(self.device)
+        else:
+            inp_x = x
+            inp_e_a_m = encoder_attention_mask
 
         model_kwargs = {
             "input_ids":inp_x,
             "attention_mask": inp_e_a_m,
         }
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         summary_ids = self.model.generate(**model_kwargs)
         text = [self.tokenizer_encoder.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
         with open(self.save_results + '_lbl_file', 'a') as f_lbl:
@@ -1335,124 +1354,31 @@ class GenerativeTrainer(Trainer):
 
         return BatchResult(0.0,0)
 
+    # def perplexity(self, batch, stride=512):
+    #     max_length = self.model.config.max_position_embeddings
+    #     lls = []
+    #     for i in tqdm(range(0, encodings.input_ids.size(1), stride)):
+    #         begin_loc = max(i + stride - max_length, 0)
+    #         end_loc = min(i + stride, encodings.input_ids.size(1))
+    #         trg_len = end_loc - i    # may be different from stride on last loop
+    #         input_ids = encodings.input_ids[:,begin_loc:end_loc].to(device)
+    #         target_ids = input_ids.clone()
+    #         target_ids[:,:-trg_len] = -100
 
-class OnelabelTrainer(Trainer):
-    def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
-                 epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None, create_premises=False,
-                 label=0, save_results=None, device=None, **kwargs):
-        super().__init__(model, None, optimizer, scheduler, device)
-        # self.evaluator = evaluator
-        self.tokenizer_encoder = tokenizer_encoder
-        self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
-        self.max_len = max_len
-        self.last_freeze_loss = None
-        self.freeze_ratio = 0.0
-        self.num_layers = len(list(self.model.modules()))
-        self.labels = possible_labels_ids
-        self.epsilon = epsilon
-        self.create_premises = create_premises
-        # self.rouge = nlp.load_metric("rouge", experiment_id=label)
-        self.save_results = save_results
-        self.label = label
+    #         with torch.no_grad():
+    #             outputs = model(input_ids, labels=target_ids)
+    #             log_likelihood = outputs[0] * trg_len
 
-    def _prepare_batch(self, batch):
-        P, H, labels = batch[0:3]
-        P, H, labels = list(P), list(H), list(labels)
-        input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
-        input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, padding='longest', return_tensors='pt')
+    #         lls.append(log_likelihood)
 
-        batch = (input_dict_encoder['input_ids'].to(self.device), input_dict_encoder['attention_mask'].to(self.device),
-                 input_dict_decoder['input_ids'].to(self.device), input_dict_decoder['attention_mask'].to(self.device), labels.to(self.device))
-
-        return batch
-
-    def train_epoch(self, dl_train: DataLoader, **kw):
-        return super().train_epoch(dl_train, **kw)
-
-    def test_epoch(self, dl_test: DataLoader, **kw):
-        return super().test_epoch(dl_test, **kw)
-
-    def train_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask, labels = self._prepare_batch(batch)
-        x = x.to(self.device)
-        y = y.to(self.device)
-        encoder_attention_mask = encoder_attention_mask.to(self.device)
-        decoder_attention_mask = decoder_attention_mask.to(self.device)
-
-        batch_size = x.shape[0]
-
-        model_kwargs = {
-            "attention_mask": encoder_attention_mask,
-            "decoder_attention_mask": decoder_attention_mask,
-            "labels": y
-        }
-        self.optimizer.zero_grad()
-
-        outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
-        loss = outputs[0]
-        loss = loss.view(batch_size, -1)
-        loss = self._loss_mean(loss, decoder_attention_mask[:, 1:])
-        # loss[labels!=self.label] *= -0.01
-        loss[labels != self.label] = 10 / loss[labels != self.label]
-        loss_obj = loss.mean()
-
-        del y, encoder_attention_mask, decoder_attention_mask
-
-        loss_obj.backward()
-        self.optimizer.step()
-        if self.scheduler is not None:
-            self.scheduler.step()
-
-        del x
-
-        loss_item = loss_obj.item()
-
-        acc = 1.0 / loss_item
-
-        return BatchResult(loss_item, acc)
-
-    def test_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask, labels = self._prepare_batch(batch)
-        x = x.to(self.device)
-        y = y.to(self.device)
-        encoder_attention_mask = encoder_attention_mask.to(self.device)
-        decoder_attention_mask = decoder_attention_mask.to(self.device)
-
-        model_kwargs = {
-            "attention_mask": encoder_attention_mask,
-            "decoder_attention_mask": decoder_attention_mask,
-            "labels": y.clone()
-        }
-
-        batch_size = x.shape[0]
-
-        with torch.no_grad():
-            outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
-            loss = outputs[0]
-            loss = loss.view(batch_size, -1)
-            loss = self._loss_mean(loss, decoder_attention_mask[:, 1:])
-            # loss[labels!=self.label] *= -0.01
-            loss[labels!=self.label] = 10 / loss[labels!=self.label]
-            if self.save_results is not None:
-                with open(self.save_results, 'a') as f:
-                    for l in loss.tolist():
-                        f.write(f'{l}\n')
-
-            loss = loss.mean()
-
-        del x, y, encoder_attention_mask, decoder_attention_mask
-
-        tot = loss.item()
-
-        acc = 1.0 / tot  # minimize the loss on the validation set
-
-        return BatchResult(tot, acc)
+    #     ppl = torch.exp(torch.stack(lls).sum() / end_loc)
+    #     return pll
 
 
 class DiscriminativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3,
-                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, **kwargs):
-        super().__init__(model, None, optimizer, scheduler, device)
+                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, save_likelihoods=None, **kwargs):
+        super().__init__(model, None, optimizer=optimizer, scheduler=scheduler, device=device, save_likelihoods=save_likelihoods)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -1598,6 +1524,12 @@ class DiscriminativeTrainer(Trainer):
                     f.write(f'{self.mnli_ids[self.index]},{label}\n')
                     self.index += 1
         # pdb.set_trace()
+        if self.save_likelihoods is not None:
+            true_labels_loss = outputs[0]
+            # true_labels_loss = torch.nn.LogSoftmax(1)(outputs[1])
+            # for l in true_labels_loss:
+            self.likelihoods.append(true_labels_loss)
+
         num_correct = torch.sum(labels == pred)
 
         loss_item = loss.item()
@@ -1610,23 +1542,35 @@ class DiscriminativeTrainer(Trainer):
         return BatchResult(loss_item, num_correct.item())
 
 
-class HybridTrainer(Trainer):
+class OnelabelTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
-                 epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
-                 create_premises=False, gradual_unfreeze=False, num_labels=3, device=None, **kwargs):
+                 epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None, create_premises=False,
+                 label=0, save_results=None, device=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device)
         # self.evaluator = evaluator
-        self.tokenizer = tokenizer_encoder
+        self.tokenizer_encoder = tokenizer_encoder
+        self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
         self.max_len = max_len
         self.last_freeze_loss = None
         self.freeze_ratio = 0.0
+        self.num_layers = len(list(self.model.modules()))
         self.labels = possible_labels_ids
-        self.gen = GenerativeTrainer(model.model1, optimizer, scheduler, device=device,
-                                     possible_labels_ids=possible_labels_ids, tokenizer_encoder=tokenizer_encoder,
-                                     tokenizer_decoder=tokenizer_decoder, gradual_unfreeze=gradual_unfreeze)
-        self.disc = DiscriminativeTrainer(model.model2, optimizer, scheduler, device=device,
-                                          tokenizer=tokenizer_encoder,
-                                          num_labels=num_labels)
+        self.epsilon = epsilon
+        self.create_premises = create_premises
+        # self.rouge = nlp.load_metric("rouge", experiment_id=label)
+        self.save_results = save_results
+        self.label = label
+
+    def _prepare_batch(self, batch):
+        P, H, labels = batch[0:3]
+        P, H, labels = list(P), list(H), list(labels)
+        input_dict_encoder = self.tokenizer_encoder.batch_encode_plus(H, padding='longest', return_tensors='pt')
+        input_dict_decoder = self.tokenizer_decoder.batch_encode_plus(P, padding='longest', return_tensors='pt')
+
+        batch = (input_dict_encoder['input_ids'].to(self.device), input_dict_encoder['attention_mask'].to(self.device),
+                 input_dict_decoder['input_ids'].to(self.device), input_dict_decoder['attention_mask'].to(self.device), labels.to(self.device))
+
+        return batch
 
     def train_epoch(self, dl_train: DataLoader, **kw):
         return super().train_epoch(dl_train, **kw)
@@ -1635,7 +1579,7 @@ class HybridTrainer(Trainer):
         return super().test_epoch(dl_test, **kw)
 
     def train_batch(self, batch) -> BatchResult:
-        x, encoder_attention_mask, y, decoder_attention_mask = self.gen._prepare_batch(batch)
+        x, encoder_attention_mask, y, decoder_attention_mask, labels = self._prepare_batch(batch)
         x = x.to(self.device)
         y = y.to(self.device)
         encoder_attention_mask = encoder_attention_mask.to(self.device)
@@ -1643,49 +1587,69 @@ class HybridTrainer(Trainer):
 
         batch_size = x.shape[0]
 
-        kwargs1 = {
-            "input_ids": x,
-            "decoder_input_ids": y,
+        model_kwargs = {
             "attention_mask": encoder_attention_mask,
             "decoder_attention_mask": decoder_attention_mask,
             "labels": y
         }
-
-        x_disc, attention_mask_disc, labels_disc, token_type_ids = self.disc._prepare_batch(batch)
-        x_disc = x_disc.to(self.device)
-        attention_mask_disc = attention_mask_disc.to(self.device)
-        labels_disc = labels_disc.to(self.device)
-
-        kwargs2 = {
-            "input_ids": x_disc,
-            "attention_mask": attention_mask_disc,
-            "labels": labels_disc
-        }
-
-        if token_type_ids is not None:
-            token_type_ids = token_type_ids.to(self.device)
-            kwargs2['token_type_ids'] = token_type_ids
-
         self.optimizer.zero_grad()
 
-        loss = self.model(kwargs1, kwargs2)
-        loss = loss.mean()
+        outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
+        loss = outputs[0]
+        loss = loss.view(batch_size, -1)
+        loss = self._loss_mean(loss, decoder_attention_mask[:, 1:])
+        # loss[labels!=self.label] *= -0.01
+        loss[labels != self.label] = 10 / loss[labels != self.label]
+        loss_obj = loss.mean()
 
-        loss.backward()
+        del y, encoder_attention_mask, decoder_attention_mask
+
+        loss_obj.backward()
         self.optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
 
-        # loss1 = self.gen.train_batch(batch).loss
-        # loss2 = self.disc.train_batch(batch).loss
+        del x
 
-        self.model.eval()  # small hack but it's working
-        acc = self.gen.test_batch(batch)
-        num_correct = acc.num_correct
-        self.model.train()
+        loss_item = loss_obj.item()
 
-        return BatchResult(loss.item(), num_correct)
+        acc = 1.0 / loss_item
+
+        return BatchResult(loss_item, acc)
 
     def test_batch(self, batch) -> BatchResult:
-        res = self.gen.test_batch(batch)
-        return res
+        x, encoder_attention_mask, y, decoder_attention_mask, labels = self._prepare_batch(batch)
+        x = x.to(self.device)
+        y = y.to(self.device)
+        encoder_attention_mask = encoder_attention_mask.to(self.device)
+        decoder_attention_mask = decoder_attention_mask.to(self.device)
+
+        model_kwargs = {
+            "attention_mask": encoder_attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "labels": y.clone()
+        }
+
+        batch_size = x.shape[0]
+
+        with torch.no_grad():
+            outputs = self.model(input_ids=x, decoder_input_ids=y, **model_kwargs)
+            loss = outputs[0]
+            loss = loss.view(batch_size, -1)
+            loss = self._loss_mean(loss, decoder_attention_mask[:, 1:])
+            # loss[labels!=self.label] *= -0.01
+            loss[labels!=self.label] = 10 / loss[labels!=self.label]
+            if self.save_results is not None:
+                with open(self.save_results, 'a') as f:
+                    for l in loss.tolist():
+                        f.write(f'{l}\n')
+
+            loss = loss.mean()
+
+        del x, y, encoder_attention_mask, decoder_attention_mask
+
+        tot = loss.item()
+
+        acc = 1.0 / tot  # minimize the loss on the validation set
+
+        return BatchResult(tot, acc)
