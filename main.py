@@ -516,6 +516,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         all_labels_text = ["SUPPORTS", "REFUTES", "NOT-ENOUGH-INFO"]
         # all_labels_text = ['A','B','C']
         # all_labels_text = ['A','B']
+    elif 'hans' in data_dir_prefix:
+        all_labels_text = ["contradiction\n", "entailment\n", "neutral\n"]
     else:
         size_train = 10**8
         all_labels_text = list(set(
@@ -550,6 +552,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
     dataloader_args = {}
     train_args = {'reduction':reduction, 'ratios':ratios, 'save_likelihoods':save_likelihoods}
+    if 'hans' in data_dir_prefix:
+        train_args['hans']=True
     hyp = None
     if hyp_only_model is not None:
         if os.path.isdir(hyp_only_model):

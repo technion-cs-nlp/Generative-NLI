@@ -127,7 +127,7 @@ class Trainer(abc.ABC):
     """
 
     def __init__(self, model, loss_fn, optimizer, scheduler, device='cpu', gradual_unfreeze=False, 
-                    save_likelihoods=None):
+                    save_likelihoods=None, hans=False):
         """
         Initialize the trainer.
         :param model: Instance of the model to train.
@@ -150,6 +150,7 @@ class Trainer(abc.ABC):
         self.save_likelihoods = save_likelihoods 
         if self.save_likelihoods is not None:
             self.likelihoods = []
+        self.hans = hans
 
     @staticmethod
     def _loss_mean(loss, attention):
@@ -540,8 +541,8 @@ class GenerativeTrainer(Trainer):
                  create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
                  rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
                  mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, device=None, ratios=None, 
-                 save_likelihoods=None, generate_all_labels=False, **kwargs):
-        super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze, save_likelihoods=save_likelihoods)
+                 save_likelihoods=None, generate_all_labels=False, hans=False, **kwargs):
+        super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze, save_likelihoods=save_likelihoods,hans=hans)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
         self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
@@ -1273,12 +1274,15 @@ class GenerativeTrainer(Trainer):
             del inp_y, inp_d_a_m, inp_e_a_m
         del inp_x
 
-        
-        pred = torch.tensor([self.labels[i] for i in pred])
-        pred.to('cpu')
+        # self.hans = True
+        # pred = torch.tensor([self.labels[i] for i in pred])
+        if self.hans:
+            # pdb.set_trace()
+            pred[pred==0]=2
+        pred = pred.to('cpu')
         # if batch[2] is None:
             # return pred
-        correct_labels = correct_labels.to('cpu')
+        correct_labels = batch[2].to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
         # pdb.set_trace()
         if self.save_results is not None:
