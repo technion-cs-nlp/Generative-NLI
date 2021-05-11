@@ -238,19 +238,21 @@ class DiscriminativeDataset(Dataset):
         if self.inject_bias > lbl:
             with temp_seed(index):  # stay the same for every epoch
                 rand = np.random.random()
-                delta = (1 - self.bias_ratio) / (self.num_labels - 1)
+                delta = (1 - self.bias_ratio) / (self.num_labels)
                 bias_idx = None
-                if rand < self.bias_ratio:  # randomly add bias
+                if rand <= self.bias_ratio:  # randomly add bias
                     bias_idx = lbl.item()
                 elif self.non_discriminative_bias:
-                    lower_bound = self.bias_ratio
-                    upper_bound = self.bias_ratio + delta
-                    for i in range(1, len(self.bias_ids)):
-                        if lower_bound <= rand < upper_bound:
-                            bias_idx = (lbl.item() + i) % self.num_labels
-                            break
-                        lower_bound = upper_bound
-                        upper_bound = lower_bound + delta
+                    idx = np.random.choice(list(range(self.num_labels)))
+                    bias_idx = (lbl.item() + idx) % self.num_labels
+                    # lower_bound = self.bias_ratio
+                    # upper_bound = self.bias_ratio + delta
+                    # for i in range(len(self.bias_ids)):
+                    #     if lower_bound <= rand < upper_bound:
+                    #         bias_idx = (lbl.item() + i) % self.num_labels
+                    #         break
+                    #     lower_bound = upper_bound
+                    #     upper_bound = lower_bound + delta
 
                 if bias_idx is not None:
                     hypothesis_splited = hypothesis.split()
