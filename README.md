@@ -29,19 +29,24 @@ Quick examples:
 Train generative BART model on SNLI:
 
 ```
-python -n NAME --checkpoints <path to checkpoints> --model type bart --model-name facebook/bart-base --data-dir-prefix data/snli_1.0/cl_snli
+python -n NAME --checkpoints <path to checkpoints> --model-type bart --model-name facebook/bart-base --data-dir-prefix data/snli_1.0/cl_snli
 ```
 
 Train discriminative BART model on MNLI:
 
 ```
-python -n NAME --checkpoints <path to checkpoints> --model type disc --model-name facebook/bart-base --data-dir-prefix data/mnli/cl_multinli
+python -n NAME --checkpoints <path to checkpoints> --model-type disc --model-name facebook/bart-base --data-dir-prefix data/mnli/cl_multinli
 ```
 
 Train hypothesis-only BERT model on MNLI:
 
 ```
-python -n NAME --checkpoints <path to checkpoints> --model type disc -ho --model-name bert-base-uncased --data-dir-prefix data/mnli/cl_multinli
+python -n NAME --checkpoints <path to checkpoints> --model-type disc -ho --model-name bert-base-uncased --data-dir-prefix data/mnli/cl_multinli
+```
+
+Fine-tune a model (same as paper):
+```
+python -n NAME --checkpoints <path to checkpoints> -lr 5e-6 --model-path <path to generative model> -hom <path to hypothesis-only model> --model-type bart --model-name facebook/bart-base --gamma 1.0
 ```
 
 Full list of arguments:
