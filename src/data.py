@@ -115,7 +115,7 @@ class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer=None, sep='|||', max_len=512, dropout=0.0,
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
-                 non_discriminative_bias=False, seed=42, threshold=0.0, 
+                 non_discriminative_bias=False, misalign_bias=False, seed=42, threshold=0.0, 
                  attribution_map=None, move_to_hypothesis=False, filt_method='true',
                  attribution_tokenizer=None, possible_labels=None, rev=False, pure_gen=False):
         if bias_ids is None:
@@ -138,6 +138,7 @@ class DiscriminativeDataset(Dataset):
         self.bias_ratio = bias_ratio
         self.bias_location = bias_location
         self.non_discriminative_bias = non_discriminative_bias
+        self.misalign_bias = misalign_bias
         self.num_labels = len(list(set(labels))) if labels is not None else 3
         self.threshold = threshold
         self.attribution_map = attribution_map
@@ -253,6 +254,9 @@ class DiscriminativeDataset(Dataset):
                     #         break
                     #     lower_bound = upper_bound
                     #     upper_bound = lower_bound + delta
+
+                if self.misalign_bias:
+                    bias_idx = (bias_idx + 1) % self.num_labels
 
                 if bias_idx is not None:
                     hypothesis_splited = hypothesis.split()
