@@ -2,15 +2,15 @@ import os, torch
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
 
-x = torch.load('likelihoods/hyp_only_likelihoods.torch', map_location=torch.device('cpu'))
-y_disc = torch.load('likelihoods/disc_likelihoods.torch', map_location=torch.device('cpu'))
-y_gen = torch.load('likelihoods/gen_likelihoods.torch', map_location=torch.device('cpu'))
-y_rand = torch.load('likelihoods/rand_likelihoods.torch', map_location=torch.device('cpu'))
-y_ft = torch.load('likelihoods/bart_ft.torch', map_location=torch.device('cpu'))
+x = torch.load('exp_bart_b_mnli_hyp.torch', map_location=torch.device('cpu'))
+y_disc = torch.load('exp_bart_b_mnli_disc.torch', map_location=torch.device('cpu'))
+y_gen = torch.load('exp_bart_b_mnli_reg.torch', map_location=torch.device('cpu'))
+y_rand = torch.load('random_mnli.torch', map_location=torch.device('cpu'))
+y_ft = torch.load('exp_bart_b_mnli_ft.torch', map_location=torch.device('cpu'))
 
-with open('data/snli_1.0/cl_snli_test_lbl_file') as f:
+with open('data/mnli/cl_multinli_dev_matched_lbl_file') as f:
     test_labels = f.readlines()
-with open('data/snli_1.0/cl_snli_train_lbl_file') as f:
+with open('data/mnli/cl_multinli_train_lbl_file') as f:
     train_labels = f.readlines()
 
 most_common = max(set(train_labels), key=train_labels.count)
