@@ -22,6 +22,7 @@ def ph2inpoutp(p, h, sep='--+'):
     return input_tokens, output_tokens
 
 filenames = [fn for fn in sorted(glob.glob('../*source_file')) if 'hard' not in fn]
+filenames = filenames + ['hans_evalset_full_source_file', 'hans_evalset_lexical_overlap_source_file', 'hans_evalset_subsequence_source_file', 'hans_evalset_constituent_source_file']
 
 out_dir = 'train_test_data_hansformat'
 os.makedirs(out_dir, exist_ok=True)
