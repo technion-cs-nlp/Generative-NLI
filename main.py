@@ -45,7 +45,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    gradual_unfreeze=False,
                    ret_res=False, gamma=0.0, tie_encoder_decoder=False, 
                    # Dataset params
-                   inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
+                   inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False, misalign_bias=False,
                    label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
                    attribution_tokenizer=None, premise_only=False, cheat=False, calc_uniform=False, pure_gen=False):
     if not seed:
@@ -428,7 +428,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                label=None, attribution_map=None, move_to_hypothesis=False, hyp_only_model=None, threshold=0.0,
                reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False,
                premise_only=False, calc_uniform=False, reverse=False, pure_gen=False,
-               inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False,
+               inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False, misalign_bias=False,
                save_likelihoods=None, val=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -635,6 +635,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         'bias_location': bias_location,
         'non_discriminative_bias': non_discriminative_bias,
         'hypothesis_only': hypothesis_only,
+        'misalign_bias': misalign_bias
     }
     data_args.update(data_dict)
 
@@ -876,6 +877,7 @@ def parse_cli():
                         default='start')
     sp_exp.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative', 
                         dest='non_discriminative_bias', action='store_true')
+    sp_exp.add_argument('--misalign_bias', '-mb', help='Bias token is misailgned with true label', action='store_true')
     sp_exp.add_argument('--attribution-map', '-am', type=str, 
                         help='path of attribution maps folder',
                         default=None)
@@ -949,7 +951,7 @@ def parse_cli():
     sp_exp.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
 
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
-                        generate_hypothesis=False, non_discriminative_bias=False, gradual_unfreeze=False,
+                        generate_hypothesis=False, non_discriminative_bias=False, misalign_bias=False,  gradual_unfreeze=False,
                         hard_validation=False, merge_train=False, train_hyp=False, test_with_prior=False,premise_only=False,
                         cheat=False, tie_encoder_decoder=False, calc_uniform=False, reverse=False, pure_gen=False)
 
@@ -1033,8 +1035,9 @@ def parse_cli():
                         default='start')
     sp_test.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative', 
                         dest='non_discriminative_bias', action='store_true')
+    sp_test.add_argument('--misalign_bias', '-mb', help='Bias token is misailgned with true label', action='store_true')
     sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False, calc_uniform=False, reverse=False,
-                        non_discriminative_bias=False)
+                        non_discriminative_bias=False, misalign_bias=False)
 
 
     # # Model
