@@ -1381,8 +1381,8 @@ class GenerativeTrainer(Trainer):
 
 class DiscriminativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3,
-                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, save_likelihoods=None, **kwargs):
-        super().__init__(model, None, optimizer=optimizer, scheduler=scheduler, device=device, save_likelihoods=save_likelihoods)
+                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, save_likelihoods=None, hans=False, **kwargs):
+        super().__init__(model, None, optimizer=optimizer, scheduler=scheduler, device=device, save_likelihoods=save_likelihoods, hans=hans)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -1515,6 +1515,9 @@ class DiscriminativeTrainer(Trainer):
         # check accuracy
         labels = labels.to('cpu')
         pred = torch.argmax(logits, dim=1).to('cpu')
+        
+        if self.hans:
+            pred[pred==0] = 2
         # import pdb; pdb.set_trace()
 
         if self.save_results is not None:
