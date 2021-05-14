@@ -575,7 +575,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
     dataloader_args = {}
     train_args = {'reduction':reduction, 'ratios':ratios, 'save_likelihoods':save_likelihoods}
-    if 'hans' in data_dir_prefix:
+    if 'hans_evalset' in data_dir_prefix:
         train_args['hans']=True
     hyp = None
     if hyp_only_model is not None:
