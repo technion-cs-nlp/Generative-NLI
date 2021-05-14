@@ -457,7 +457,10 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     hard_test_lines = None
 
     if save_results is not None:
-        test_str = ('test_matched_unlabeled' if 'mnli' in data_dir_prefix else 'test')
+        if 'hans' in data_dir_prefix:
+            test_str = 'dev_mismatched'
+        else:
+            test_str = ('test_matched_unlabeled' if 'mnli' in data_dir_prefix else 'test')
     else:
         if 'hans' in data_dir_prefix:
             test_str = ''
@@ -626,7 +629,13 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
     if 'mnli' in data_dir_prefix:
-        train_args['mnli_ids_path'] = 'other/mnli_ids.csv'
+        if test_str == 'dev_matched':
+            train_args['mnli_ids_path'] = 'other/mnli_ids_dev.csv'
+        elif test_str == 'dev_mismatched':
+            train_args['mnli_ids_path'] = 'other/mnli_ids_dev_mm.csv'
+        else:
+            train_args['mnli_ids_path'] = 'other/mnli_ids.csv'
+
 
     data_dict = {
         'inject_bias': inject_bias,
