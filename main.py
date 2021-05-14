@@ -239,10 +239,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['hyp_prior_model'] = hyp
         train_args['test_with_prior'] = test_with_prior
 
-    if hypothesis_only or premise_only:
-        dataset = HypothesisOnlyDataset
-    else:
-        dataset = DiscriminativeDataset
+    dataset = DiscriminativeDataset
 
     if model_type in ['encode-decode', 'bart', 'shared', 't5', 'decoder-only', 'bert2bert']:
         if label is None:
@@ -289,7 +286,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         'bias_ids': bias_ids,
         'bias_ratio': bias_ratio,
         'bias_location': bias_location,
-        'non_discriminative_bias': non_discriminative_bias
+        'non_discriminative_bias': non_discriminative_bias,
+        'hypothesis_only':hypothesis_only,
     }
     data_args.update(data_dict)
     # import pdb; pdb.set_trace()
@@ -607,7 +605,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         # dataloader_args['collate_fn'] = my_collate
     elif model_type.startswith('disc'):
         if hypothesis_only or premise_only:
-            dataset = HypothesisOnlyDataset
+            dataset = DiscriminativeDataset
             data_args['premise_only'] = premise_only
         else:
             dataset = DiscriminativeDataset
@@ -636,6 +634,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         'bias_ratio': bias_ratio,
         'bias_location': bias_location,
         'non_discriminative_bias': non_discriminative_bias,
+        'hypothesis_only': hypothesis_only,
         'misalign_bias': misalign_bias
     }
     data_args.update(data_dict)
@@ -674,7 +673,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     # fit_res = trainer.test(dl_train, checkpoints=checkpoints, writer=writer)#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     save_experiment(run_name, out_dir, cfg, fit_res)
-    if hard_test_lines is not None:
+    if hard_test_lines is not None and len(hard_test_lines) > 0:
         if hasattr(trainer, 'save_results') and trainer.save_results is not None:
             trainer.save_results += '_hard'
         if hasattr(trainer, 'save_likelihoods') and trainer.save_likelihoods is not None:
