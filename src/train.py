@@ -1275,7 +1275,6 @@ class GenerativeTrainer(Trainer):
         del inp_x
 
         # self.hans = True
-        # pred = torch.tensor([self.labels[i] for i in pred])
         if self.hans:
             # pdb.set_trace()
             pred[pred==0]=2
@@ -1284,6 +1283,9 @@ class GenerativeTrainer(Trainer):
             # return pred
         correct_labels = batch[2].to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
+
+        pred = torch.tensor([self.labels[i] for i in pred])
+
         # pdb.set_trace()
         if self.save_results is not None:
             if not os.path.isfile(self.save_results + '.csv'):
