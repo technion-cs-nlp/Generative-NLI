@@ -429,7 +429,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False,
                premise_only=False, calc_uniform=False, reverse=False, pure_gen=False,
                inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False, misalign_bias=False,
-               save_likelihoods=None, val=False):
+               save_likelihoods=None, val=False, use_dev_test=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -458,6 +458,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     if save_results is not None:
         if 'hans' in data_dir_prefix:
+            test_str = 'dev_mismatched'
+        elif use_dev_test:
             test_str = 'dev_mismatched'
         else:
             test_str = ('test_matched_unlabeled' if 'mnli' in data_dir_prefix else 'test')
@@ -538,7 +540,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         # all_labels_text = ['A','B','C']
         # all_labels_text = ['A','B']
     elif 'hans' in data_dir_prefix:
-        all_labels_text = ["contradiction\n", "entailment\n", "neutral\n"]
+        all_labels_text = ["contradiction", "entailment", "neutral"]
     else:
         size_train = 10**8
         all_labels_text = list(set(
@@ -1067,7 +1069,8 @@ def parse_cli():
     sp_test.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
     sp_test.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
     sp_test.add_argument('--val', '-val', dest='val', action='store_true')
-    sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False, pure_gen=False, val=False)
+    sp_test.add_argument('--use_dev_test', action='store_true')
+    sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False, pure_gen=False, val=False, use_dev_test=False)
     sp_test.add_argument('--save-likelihoods', '-sl', type=str, help='Pass path if you want to save the likelihoods as a torch tensor',
                          default=None, required=False)
 
