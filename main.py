@@ -540,7 +540,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         # all_labels_text = ['A','B','C']
         # all_labels_text = ['A','B']
     elif 'hans' in data_dir_prefix:
-        all_labels_text = ["contradiction", "entailment", "neutral"]
+        all_labels_text = ["contradiction\n", "entailment\n", "neutral\n"]
     else:
         size_train = 10**8
         all_labels_text = list(set(

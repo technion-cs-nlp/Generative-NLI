@@ -173,7 +173,7 @@ class DiscriminativeDataset(Dataset):
         if self.possible_labels is None:
             self.possible_labels = list(set(labels))
         self.possible_labels.sort()
-        res = [(self.possible_labels.index(l.strip()) if l.strip() in self.possible_labels else 0) for l in labels]
+        res = [(self.possible_labels.index(l) if l in self.possible_labels else 0) for l in labels]
 
         return res
 
@@ -337,7 +337,7 @@ class HypothesisOnlyDataset(Dataset):
         if self.possible_labels is None:
             self.possible_labels = list(set(labels))
         self.possible_labels.sort()
-        res = [(self.possible_labels.index(l.strip()) if l.strip() in self.possible_labels else 0) for l in labels]
+        res = [(self.possible_labels.index(l) if l in self.possible_labels else 0) for l in labels]
         return res
 
     def __getitem__(self, index):
