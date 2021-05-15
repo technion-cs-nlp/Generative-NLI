@@ -30,3 +30,5 @@ exp_bart_b_attr_t_model/pytorch_model.bin
 likelihoods
 *.sh
 transformers
+results
+results_test
