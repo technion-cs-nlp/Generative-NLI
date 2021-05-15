@@ -1275,7 +1275,6 @@ class GenerativeTrainer(Trainer):
         del inp_x
 
         # self.hans = True
-        # pred = torch.tensor([self.labels[i] for i in pred])
         if self.hans:
             # pdb.set_trace()
             pred[pred==0]=2
@@ -1284,6 +1283,9 @@ class GenerativeTrainer(Trainer):
             # return pred
         correct_labels = batch[2].to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
+
+        pred = torch.tensor([self.labels[i] for i in pred])
+
         # pdb.set_trace()
         if self.save_results is not None:
             if not os.path.isfile(self.save_results + '.csv'):
@@ -1381,8 +1383,8 @@ class GenerativeTrainer(Trainer):
 
 class DiscriminativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3,
-                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, save_likelihoods=None, **kwargs):
-        super().__init__(model, None, optimizer=optimizer, scheduler=scheduler, device=device, save_likelihoods=save_likelihoods)
+                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, save_likelihoods=None, hans=False, **kwargs):
+        super().__init__(model, None, optimizer=optimizer, scheduler=scheduler, device=device, save_likelihoods=save_likelihoods, hans=hans)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -1515,18 +1517,36 @@ class DiscriminativeTrainer(Trainer):
         # check accuracy
         labels = labels.to('cpu')
         pred = torch.argmax(logits, dim=1).to('cpu')
+        
+        if self.hans:
+            pred[pred==0] = 2
         # import pdb; pdb.set_trace()
+        
+        toks = self.tokenizer.batch_encode_plus(list(batch[1]), padding='longest', return_tensors='pt', truncation=True)
+        first_tok = toks['input_ids'][:, 1]
+        first_tok[first_tok == 7454] = 50001
+        first_tok = first_tok-50000 # 0, 1 or 2
+        first_tok = first_tok.cpu().numpy().tolist()
 
         if self.save_results is not None:
             if not os.path.isfile(self.save_results + '.csv'):
                 with open(self.save_results + '.csv', 'w') as f:
                     f.write('pairID,gold_label\n')
+
+            if not os.path.isfile(self.save_results + '_firsttoken.csv'):
+                with open(self.save_results + '_firsttoken.csv', 'w') as f:
+                    f.write('pairID,firsttoken\n')
+
             possible_labels = ['contradiction', 'entailment', 'neutral']
-            with open(self.save_results + '.csv', 'a') as f:
-                for l in pred.tolist():
-                    label = possible_labels[l]
-                    f.write(f'{self.mnli_ids[self.index]},{label}\n')
-                    self.index += 1
+            with open(self.save_results + '_firsttoken.csv', 'a') as f_ft:
+                with open(self.save_results + '.csv', 'a') as f:
+                    for l, ft in zip(pred.tolist(), first_tok):
+                        label = possible_labels[l]
+                        ft = possible_labels[ft]
+                        f.write(f'{self.mnli_ids[self.index]},{label}\n')
+                        f_ft.write(f'{self.mnli_ids[self.index]},{ft}\n')
+                        self.index += 1
+
         # pdb.set_trace()
         if self.save_likelihoods is not None:
             true_labels_loss = outputs[0]

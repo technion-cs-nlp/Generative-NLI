@@ -429,7 +429,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
                reduction='sum', filt_method='true', attribution_tokenizer=None, test_with_prior=False,
                premise_only=False, calc_uniform=False, reverse=False, pure_gen=False,
                inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False, misalign_bias=False,
-               save_likelihoods=None, val=False):
+               save_likelihoods=None, val=False, use_dev_test=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -457,7 +457,12 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     hard_test_lines = None
 
     if save_results is not None:
-        test_str = ('test_matched_unlabeled' if 'mnli' in data_dir_prefix else 'test')
+        if 'hans' in data_dir_prefix:
+            test_str = 'dev_mismatched'
+        elif use_dev_test:
+            test_str = 'dev_mismatched'
+        else:
+            test_str = ('test_matched_unlabeled' if 'mnli' in data_dir_prefix else 'test')
     else:
         if 'hans' in data_dir_prefix:
             test_str = ''
@@ -570,7 +575,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
     dataloader_args = {}
     train_args = {'reduction':reduction, 'ratios':ratios, 'save_likelihoods':save_likelihoods}
-    if 'hans' in data_dir_prefix:
+    if 'hans_evalset' in data_dir_prefix:
         train_args['hans']=True
     hyp = None
     if hyp_only_model is not None:
@@ -626,7 +631,13 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
     if 'mnli' in data_dir_prefix:
-        train_args['mnli_ids_path'] = 'other/mnli_ids.csv'
+        if test_str == 'dev_matched':
+            train_args['mnli_ids_path'] = 'other/mnli_ids_dev.csv'
+        elif test_str == 'dev_mismatched':
+            train_args['mnli_ids_path'] = 'other/mnli_ids_dev_mm.csv'
+        else:
+            train_args['mnli_ids_path'] = 'other/mnli_ids.csv'
+
 
     data_dict = {
         'inject_bias': inject_bias,
@@ -1058,7 +1069,8 @@ def parse_cli():
     sp_test.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
     sp_test.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
     sp_test.add_argument('--val', '-val', dest='val', action='store_true')
-    sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False, pure_gen=False, val=False)
+    sp_test.add_argument('--use_dev_test', action='store_true')
+    sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False, pure_gen=False, val=False, use_dev_test=False)
     sp_test.add_argument('--save-likelihoods', '-sl', type=str, help='Pass path if you want to save the likelihoods as a torch tensor',
                          default=None, required=False)
 
