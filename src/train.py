@@ -1291,7 +1291,7 @@ class GenerativeTrainer(Trainer):
                     f.write('pairID,gold_label\n')
             with open(self.save_results + '.csv', 'a') as f:
                 for l in pred.tolist():
-                    label = self.tokenizer_decoder.decode(l)
+                    label = self.tokenizer_decoder.decode(self.labels[l])
                     label = label.replace('[', '').replace(']', '')
                     f.write(f'{self.mnli_ids[self.index]},{label}\n')
                     self.index += 1
@@ -1299,7 +1299,7 @@ class GenerativeTrainer(Trainer):
         if self.save_likelihoods is not None:
             true_labels_loss = ((loss-(-(-loss).logsumexp(0)))* mask.to(self.device)).sum(0)
             # for l in true_labels_loss:
-            self.likelihoods.append(true_labels_loss)
+            self.likelihoods.append(pred == correct_labels)
 
         # for i in pred:
         #     temp[i-min(self.labels)]+=1
@@ -1532,7 +1532,7 @@ class DiscriminativeTrainer(Trainer):
             true_labels_loss = outputs[0]
             # true_labels_loss = torch.nn.LogSoftmax(1)(outputs[1])
             # for l in true_labels_loss:
-            self.likelihoods.append(true_labels_loss)
+            self.likelihoods.append(labels == pred)
 
         num_correct = torch.sum(labels == pred)
 

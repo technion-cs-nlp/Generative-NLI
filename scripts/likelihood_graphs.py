@@ -1,12 +1,12 @@
 import os, torch
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
+import numpy as np
 
-x = torch.load('likelihoods/hyp_only_likelihoods.torch', map_location=torch.device('cpu'))
-y_disc = torch.load('likelihoods/disc_likelihoods.torch', map_location=torch.device('cpu'))
-y_gen = torch.load('likelihoods/gen_likelihoods.torch', map_location=torch.device('cpu'))
-y_rand = torch.load('likelihoods/rand_likelihoods.torch', map_location=torch.device('cpu'))
-y_ft = torch.load('likelihoods/bart_ft.torch', map_location=torch.device('cpu'))
+x = torch.load('snli_accuracy_hyp.torch', map_location=torch.device('cpu'))
+y_disc = torch.load('snli_accuracy_disc.torch', map_location=torch.device('cpu'))
+y_gen = torch.load('snli_accuracy_gen.torch', map_location=torch.device('cpu'))
+y_ft = torch.load('snli_accuracy_ft.torch', map_location=torch.device('cpu'))
 
 with open('data/snli_1.0/cl_snli_test_lbl_file') as f:
     test_labels = f.readlines()
@@ -16,11 +16,13 @@ with open('data/snli_1.0/cl_snli_train_lbl_file') as f:
 most_common = max(set(train_labels), key=train_labels.count)
 # import pdb; pdb.set_trace()
 y_maj = torch.tensor([(1.0 if sam==most_common else 0.0) for sam in test_labels])
-bias_probs = (-x).exp()
-rand_probs = (-y_rand).exp()
-disc_probs = (-y_disc).exp()
-gen_probs = (-y_gen).exp()
-ft_probs = (-y_ft).exp()
+possible_labels = list(set(train_labels))
+y_rand = torch.tensor([(1.0 if np.random.choice(possible_labels) == sam else 0.0) for sam in test_labels])
+bias_probs = x.long()
+rand_probs = y_rand
+disc_probs = y_disc.long()
+gen_probs = y_gen.long()
+ft_probs = y_ft.long()
 temp = 0.001
 # scaled_bias_probs=bias_probs**(1/temp)
 # bias_probs = scaled_bias_probs/scaled_bias_probs.sum()
