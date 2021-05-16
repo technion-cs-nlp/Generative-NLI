@@ -1,5 +1,6 @@
 *.out
 *.json
+# !results/*
 checkpoints
 *.pyc
 data/*
@@ -32,3 +33,4 @@ likelihoods
 transformers
 results
 results_test
+*.torch
