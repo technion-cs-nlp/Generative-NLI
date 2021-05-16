@@ -1284,10 +1284,9 @@ class GenerativeTrainer(Trainer):
         correct_labels = batch[2].to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
-        pred = torch.tensor([self.labels[i] for i in pred])
-
         # pdb.set_trace()
         if self.save_results is not None:
+            pred = torch.tensor([self.labels[i] for i in pred])
             if not os.path.isfile(self.save_results + '.csv'):
                 with open(self.save_results + '.csv', 'w') as f:
                     f.write('pairID,gold_label\n')
@@ -1297,6 +1296,7 @@ class GenerativeTrainer(Trainer):
                     label = label.replace('[', '').replace(']', '')
                     f.write(f'{self.mnli_ids[self.index]},{label}\n')
                     self.index += 1
+            pred = torch.tensor([self.labels.index(i) for i in pred])
         # pdb.set_trace()
         if self.save_likelihoods is not None:
             true_labels_loss = ((loss-(-(-loss).logsumexp(0)))* mask.to(self.device)).sum(0)
@@ -1522,11 +1522,11 @@ class DiscriminativeTrainer(Trainer):
             pred[pred==0] = 2
         # import pdb; pdb.set_trace()
         
-        toks = self.tokenizer.batch_encode_plus(list(batch[1]), padding='longest', return_tensors='pt', truncation=True)
-        first_tok = toks['input_ids'][:, 1]
-        first_tok[first_tok == 7454] = 50001
-        first_tok = first_tok-50000 # 0, 1 or 2
-        first_tok = first_tok.cpu().numpy().tolist()
+        # toks = self.tokenizer.batch_encode_plus(list(batch[1]), padding='longest', return_tensors='pt', truncation=True)
+        # first_tok = toks['input_ids'][:, 1]
+        # first_tok[first_tok == 7454] = 50001
+        # first_tok = first_tok-50000 # 0, 1 or 2
+        # first_tok = first_tok.cpu().numpy().tolist()
 
         if self.save_results is not None:
             if not os.path.isfile(self.save_results + '.csv'):

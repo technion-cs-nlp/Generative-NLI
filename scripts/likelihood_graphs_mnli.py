@@ -8,13 +8,16 @@ y_disc = torch.load('mnli_accuracy_disc.torch', map_location=torch.device('cpu')
 y_gen = torch.load('mnli_accuracy_gen.torch', map_location=torch.device('cpu'))
 y_ft = torch.load('mnli_accuracy_ft.torch', map_location=torch.device('cpu'))
 
-with open('data/mnli/cl_multinli_dev_matched_lbl_file') as f:
+with open('data/mnli/cl_multinli_dev_mismatched_lbl_file') as f:
     test_labels = f.readlines()
+
+with open('data/mnli/cl_multinli_dev_mismatched_hard_lbl_file') as f:
+    hard_test_labels = f.readlines()
 with open('data/mnli/cl_multinli_train_lbl_file') as f:
     train_labels = f.readlines()
 
 most_common = max(set(train_labels), key=train_labels.count)
-
+# import pdb; pdb.set_trace()
 y_maj = torch.tensor([(1.0 if sam==most_common else 0.0) for sam in test_labels])
 possible_labels = list(set(train_labels))
 y_rand = torch.tensor([(1.0 if np.random.choice(possible_labels) == sam else 0.0) for sam in test_labels])
