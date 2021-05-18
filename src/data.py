@@ -26,91 +26,6 @@ def temp_seed(seed):
         np.random.set_state(state)
 
 
-class PremiseGenerationDataset(Dataset):
-
-    def __init__(self, lines, labels, tokenizer_encoder, tokenizer_decoder=None, sep='|||', max_len=512,
-                 dropout=0.0, generate_hypothesis=False):
-        assert len(lines) == len(labels)
-        super().__init__()
-        self.lines = lines
-        self.labels = labels
-        self.tokenizer_encoder = tokenizer_encoder
-        self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
-        self.sep = sep
-        self.max_len = max_len
-        self.size = len(self.lines)
-        self.dropout = dropout
-        self.generate_hypothesis = generate_hypothesis
-
-    def __getitem__(self, index):
-
-        split = self.lines[index].split(self.sep)
-
-        premise = split[0]  # Premise
-        hypothesis = split[1].replace('\n', '')  # Hypothesis
-
-        if self.generate_hypothesis:
-            hypothesis, premise = premise, hypothesis
-        #
-        # target_input = "<START> " + premise[:-1]
-
-        sent = '[' + self.labels[index][:-1].upper().replace(' ', '') + '] ' + hypothesis
-
-        input_dict = self.tokenizer_encoder.encode_plus(sent,
-                                                        max_length=self.max_len,
-                                                        pad_to_max_length=True,
-                                                        return_tensors='pt',
-                                                        truncation=True,
-                                                        )
-        target_dict = self.tokenizer_decoder.encode_plus(premise,
-                                                         max_length=self.max_len,
-                                                         pad_to_max_length=True,
-                                                         return_tensors='pt',
-                                                         truncation=True,
-                                                         )
-
-        # except Exception as e:
-        #     print(e)
-        #     print(premise)
-
-        def create_mask(inp, tokenizer):
-            mask = torch.FloatTensor(*inp.shape).uniform_() > self.dropout
-            do_not_mask = (inp == tokenizer.pad_token_id)  ## do not mask paddings
-            mask[do_not_mask] = True
-            mask[:2] = True  # do not mask bos, label token
-
-            if inp[-1] != tokenizer.pad_token_id:
-                eos_loc = -1
-            else:
-                eos_loc = (do_not_mask).nonzero()[0][0] - 1
-            mask[eos_loc] = True  # do not mask eos
-
-            return mask
-
-        if self.dropout > 0.0:  ## word dropout
-            drop_inp = input_dict['input_ids'].squeeze(0)
-            mask = create_mask(drop_inp, self.tokenizer_encoder)
-            drop_inp = drop_inp * mask + self.tokenizer_encoder.unk_token_id * ~mask
-
-            drop_out = target_dict['input_ids'].squeeze(0)
-            mask = create_mask(drop_out, self.tokenizer_decoder)
-            drop_out = drop_out * mask + self.tokenizer_decoder.unk_token_id * ~mask
-
-            res = (drop_inp, input_dict['attention_mask'].squeeze(0)
-                   , drop_out, target_dict['attention_mask'].squeeze(0))
-        else:
-            res = [input_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']] + \
-                  [target_dict[item].squeeze(0) for item in ['input_ids', 'attention_mask']]
-
-        # res = [torch.tensor(input_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']] + \
-        #       [torch.tensor(target_dict[item]) for item in ['input_ids', 'attention_mask', 'token_type_ids']]
-
-        return tuple(res)
-
-    def __len__(self):
-        return self.size
-
-
 class DiscriminativeDataset(Dataset):
 
     def __init__(self, lines, labels, tokenizer=None, sep='|||', max_len=512, dropout=0.0,
@@ -184,10 +99,6 @@ class DiscriminativeDataset(Dataset):
         premise = split[0]
         hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
-        # else:
-        #     premise = self.lines[index]["evidence"]
-        #     hypothesis = self.lines[index]["claim"]
-        #     lbl = torch.tensor(self.lines[index]["label"])
 
         if self.attribution_map is not None and self.attribution_map[index] is not None:
             threshold = self.threshold
@@ -228,10 +139,6 @@ class DiscriminativeDataset(Dataset):
                 premise, hypothesis = self.filter_premise(premise, hypothesis, filt, threshold)
 
         if self.dropout > 0.0:
-            # premise_splited = premise.split()
-            # premise_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
-            #                    for word in premise_splited]
-            # premise = ' '.join(premise_splited)
 
             hypothesis_splited = hypothesis.split()
             hypothesis_splited = [(word if np.random.random() > self.dropout else self.tokenizer.unk_token)
@@ -248,14 +155,6 @@ class DiscriminativeDataset(Dataset):
                 elif self.non_discriminative_bias:
                     idx = np.random.choice(list(range(self.num_labels)))
                     bias_idx = (lbl.item() + idx) % self.num_labels
-                    # lower_bound = self.bias_ratio
-                    # upper_bound = self.bias_ratio + delta
-                    # for i in range(len(self.bias_ids)):
-                    #     if lower_bound <= rand < upper_bound:
-                    #         bias_idx = (lbl.item() + i) % self.num_labels
-                    #         break
-                    #     lower_bound = upper_bound
-                    #     upper_bound = lower_bound + delta
 
                 if self.misalign_bias:
                     bias_idx = (bias_idx + 1) % self.num_labels
@@ -401,26 +300,13 @@ class HypothesisOnlyDataset(Dataset):
         premise_attr = filt.view(-1)[:premise_len]
         premise_attr_normal = premise_attr # / premise_attr.sum()
         mask = premise_attr_normal >= threshold
-        # import pdb; pdb.set_trace()
         premise_encoded_filtered = premise_encoded[mask]
         premise = self.tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
         if self.move_to_hypothesis:
             premise_encoded_dropped = premise_encoded[~mask]
             dropped = self.tokenizer_attr.decode(premise_encoded_dropped,skip_special_tokens=True)
-            # import pdb; pdb.set_trace()
             hypothesis = f"{dropped} {self.tokenizer_attr.sep_token} {hypothesis}"
         
         return premise, hypothesis
 
 
-class DualDataset(Dataset):
-    def __init__(self, datasetA, datasetB):
-        super().__init__()
-        self.datasetA = datasetA
-        self.datasetB = datasetB
-
-    def __getitem__(self, index):
-        return self.datasetA[index], self.datasetB[index]
-
-    def __len__(self):
-        return len(self.datasetA)

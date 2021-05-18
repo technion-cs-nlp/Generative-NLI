@@ -12,16 +12,15 @@ import torch
 from torch.nn import parameter
 from torch.utils import data
 import torchvision
-from torch.utils.data import DataLoader, Subset
-from transformers import AutoTokenizer, AdamW, AutoModel, \
+from torch.utils.data import Subset
+from transformers import AutoTokenizer, AdamW, \
     get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup, \
     get_constant_schedule_with_warmup
 
-from src.data import PremiseGenerationDataset, DiscriminativeDataset, HypothesisOnlyDataset, DualDataset
-from src.models import get_model, HybridModel
+from src.data import DiscriminativeDataset
+from src.models import get_model
 from src.train import GenerativeTrainer, DiscriminativeTrainer, OnelabelTrainer
 from src.utils import FitResult, get_max_len
-import math
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim.sgd import SGD
 
@@ -82,45 +81,31 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if gen_premise != '':
         gen_premise += '_'
 
-    if data_dir_prefix == 'fever':
-        from src.data_miki.datasets import load_dataset_aux
-        fever, _ = load_dataset_aux('fever_nli')
-        train_lines = fever['train']
-        # train_lines = train_lines.filter(lambda x: x['label']!=2)
-        train_labels = None
-        val_lines = fever['validation']
-        val_labels = None
-        fever_test, _ = load_dataset_aux('fever_symmetric')
-        test_lines = fever_test['test']
-        test_labels = None
-    else:
-        with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
-            test_labels = test_labels_file.readlines()
-        
-        with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
-            test_lines = test_lines_file.readlines()
-        
-        with open(data_dir_prefix + f'_train_{gen_premise}lbl_file') as train_labels_file:
-            train_labels = train_labels_file.readlines()
-        
-        with open(data_dir_prefix + f'_train_{gen_premise}source_file') as train_lines_file:
-            train_lines = train_lines_file.readlines()
-        
-        with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
-            val_labels = val_labels_file.readlines()
-        
-        with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
-            val_lines = val_lines_file.readlines()
-        
-        if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
-                os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
-            with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
-                hard_test_labels = hard_test_labels_file.readlines()
-                
-            with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
-                hard_test_lines = hard_test_lines_file.readlines()
-
-    # import pdb; pdb.set_trace()
+    with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
+        test_labels = test_labels_file.readlines()
+    
+    with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
+        test_lines = test_lines_file.readlines()
+    
+    with open(data_dir_prefix + f'_train_{gen_premise}lbl_file') as train_labels_file:
+        train_labels = train_labels_file.readlines()
+    
+    with open(data_dir_prefix + f'_train_{gen_premise}source_file') as train_lines_file:
+        train_lines = train_lines_file.readlines()
+    
+    with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
+        val_labels = val_labels_file.readlines()
+    
+    with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
+        val_lines = val_lines_file.readlines()
+    
+    if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
+            os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
+        with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
+            hard_test_labels = hard_test_labels_file.readlines()
+            
+        with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
+            hard_test_lines = hard_test_lines_file.readlines()
 
     if gen_premise != "":
         dict_count = {}
@@ -132,8 +117,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         mask = ~np.isin(np.array(train_lines),similar)
         train_labels = np.array(train_labels)[mask].tolist()
         train_lines = np.array(train_lines)[mask].tolist()
-        # import pdb; pdb.set_trace()
-        pass
 
     if merge_train and gen_premise != '':
         with open(data_dir_prefix + f'_train_lbl_file') as train_labels_file:
@@ -141,11 +124,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         with open(data_dir_prefix + f'_train_source_file') as train_lines_file:
             train_lines += train_lines_file.readlines()
 
-    
-    # if 'bart' in model_name:
-    #     model_type = 'bart'
-    # elif 't5' in model_name:
-    #     model_type = 't5'
 
     tokenizer = AutoTokenizer.from_pretrained(model_name if 'patrick' not in model_name else 'bert-base-uncased')
     if 'gpt' in model_name:
@@ -157,38 +135,20 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         tokenizer_decoder = GPT2Tokenizer.from_pretrained(decoder_model_name)
         tokenizer_decoder.pad_token = tokenizer_decoder.unk_token
 
-    # size_test = batches * bs_test if batches > 0 else 10 ** 8
     size_test = 10**8
     size_train = batches * bs_train if batches > 0 else 10 ** 8
 
-    if data_dir_prefix == 'fever':
-        all_labels_text = ["SUPPORTS", "REFUTES", "NOT-ENOUGH-INFO"]
-        # all_labels_text = ['A','B','C']
-        # all_labels_text = ['A','B']
-    else:
-        all_labels_text = list(set(
-            # test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
-            test_labels + train_labels + val_labels + hard_test_labels))
+    all_labels_text = list(set(
+        # test_labels + train_labels + val_labels + hard_test_labels
+        train_labels
+        ))
     all_labels_text.sort()
     ratios = None
-    # if calc_uniform:
-    #     ratios = [1/3,1/3,1/3]
-    #     # pdb.set_trace()
-    #     for i,l in enumerate(all_labels_text):
-    #         rate = len([sam for sam in train_labels if sam==l]) / len(train_labels)
-    #         ratios[i] = rate
     
     num_labels = len(all_labels_text)
-    # import pdb; pdb.set_trace()
     if label is not None:
         if model_type.startswith('disc'):
             raise AttributeError("Can't specify label with discriminative model")
-        # train_lines = np.array(train_lines)[np.array(train_labels)==all_labels_text[label]].tolist()
-        # train_labels = np.array(train_labels)[np.array(train_labels)==all_labels_text[label]].tolist()
-        # val_lines = np.array(val_lines)[np.array(val_labels)==all_labels_text[label]].tolist()
-        # val_labels = np.array(val_labels)[np.array(val_labels)==all_labels_text[label]].tolist()
-        # test_lines = np.array(test_lines)[np.array(test_labels)==all_labels_text[label]].tolist()
-        # test_labels = np.array(test_labels)[np.array(test_labels)==all_labels_text[label]].tolist()
     
     elif not model_type.startswith('disc'):
         all_labels = ['[' + l.lower().strip() + ']' for l in all_labels_text]
@@ -248,27 +208,17 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
             trainer_type = OnelabelTrainer
             train_args['label'] = label
 
-        # train_args['rev'] = rev
         train_args['possible_labels_ids'] = labels_ids
         train_args['epsilon'] = label_smoothing_epsilon
         train_args['tokenizer_encoder'] = tokenizer
         train_args['tokenizer_decoder'] = tokenizer_decoder
         train_args['gradual_unfreeze'] = gradual_unfreeze
         train_args['gamma'] = gamma
-        # dataloader_args['collate_fn'] = my_collate
+        
     elif model_type.startswith('disc'):
         trainer_type = DiscriminativeTrainer
         train_args['num_labels'] = num_labels
         train_args['tokenizer'] = tokenizer
-
-    elif model_type == 'hybrid':
-        trainer_type = HybridTrainer
-        train_args['possible_labels_ids'] = labels_ids
-        train_args['epsilon'] = label_smoothing_epsilon
-        train_args['tokenizer_encoder'] = tokenizer
-        train_args['tokenizer_decoder'] = tokenizer_decoder
-        train_args['gradual_unfreeze'] = gradual_unfreeze
-        train_args['num_labels'] = num_labels
 
     if model_type == 'decoder-only':
         train_args['decoder_only'] = True
@@ -290,7 +240,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         'hypothesis_only':hypothesis_only,
     }
     data_args.update(data_dict)
-    # import pdb; pdb.set_trace()
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[2]
     ds_test = dataset(test_lines, test_labels, tokenizer, max_len=max_len, **data_args)
@@ -298,25 +247,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[1]
     ds_val = dataset(val_lines, val_labels, tokenizer, max_len=max_len, **data_args)
-    # data_args['dropout'] = word_dropout
-
-    if cheat:        # cheat
-        if attribution_map is not None:
-            data_args['attribution_map'] = attribution_paths[3]
-        else:
-            data_args.pop('attribution_map',None)
-        ds_val = dataset(hard_test_lines, hard_test_labels, tokenizer, max_len=max_len, **data_args)
-        # if batches > 0:
-        #     ds_val = Subset(ds_hard_test, range(batches * bs_test))
-        # dl_hard_test = torch.utils.data.DataLoader(ds_hard_test, bs_test, shuffle=False, **dataloader_args)
-        # dl_val = dl_hard_test
 
     train_dict = {
-        # 'inject_bias': inject_bias,
-        # 'bias_ids': bias_ids,
-        # 'bias_ratio': bias_ratio,
-        # 'bias_location': bias_location,
-        # 'non_discriminative_bias': non_discriminative_bias,
         'dropout': word_dropout,
     }
     data_args.update(train_dict)
@@ -325,10 +257,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     data_args['filt_method'] = filt_method if filt_method != 'none' else 'true'
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
     
-    # import pdb; pdb.set_trace()
     if batches > 0:
-        # ds_test = Subset(ds_test, range(batches * bs_test))
-        # ds_val = Subset(ds_val, range(batches * bs_test))
         ds_train = Subset(ds_train, range(batches * bs_train))
 
     model = get_model(tokenizer=tokenizer,
@@ -344,12 +273,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                       tie_encoder_decoder=tie_encoder_decoder,
                       num_labels=num_labels)
 
-    # model.config.min_length = 5
-    # model.config.max_length = 64
-    # model.config.task_specific_params['summarization']['min_length'] = 5
-    # model.config.task_specific_params['summarization']['max_length'] = 64
-
-    # import pdb; pdb.set_trace()
     if torch.cuda.device_count()>1 and hyp is None:
         if hasattr(model, 'parallelize'):
             n_devices = torch.cuda.device_count()
@@ -380,7 +303,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     else:
         raise AttributeError('only SGD and Adam supported for now')
 
-    # import pdb; pdb.set_trace()
     num_batches = batches if batches > 0 else len(dl_train)
     num_steps = epochs * num_batches
     print(f"Number of training steps: {num_steps}")
@@ -478,50 +400,36 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     hard_val_labels = []
     hard_val_lines = []
 
-    if data_dir_prefix == 'fever':
-        from src.data_miki.datasets import load_dataset_aux
-        fever, _ = load_dataset_aux('fever_nli')
-        # train_lines = fever['train']
-        # train_labels = None
-        # test_lines = fever['validation']
-        # test_labels = None
-        fever_test, _ = load_dataset_aux('fever_symmetric')
-        test_lines = fever_test['test']
-        test_labels = None
-        fever_testv2, _ = load_dataset_aux('fever_symmetricv2')
-        hard_test_lines = fever_testv2['test']
-        hard_test_labels = None
-    else:
-        # pdb.set_trace()
-        with open(data_dir_prefix + f'_{test_str}{"_" if test_str!="" else ""}lbl_file') as test_labels_file:
-            test_labels = test_labels_file.readlines()
-        with open(data_dir_prefix + f'_{test_str}{"_" if test_str!="" else ""}source_file') as test_lines_file:
-            test_lines = test_lines_file.readlines()
 
-        if os.path.isfile(data_dir_prefix + f'_train_lbl_file'):
-            with open(data_dir_prefix + f'_train_lbl_file') as train_labels_file:
-                train_labels = train_labels_file.readlines()
-            with open(data_dir_prefix + f'_train_source_file') as train_lines_file:
-                train_lines = train_lines_file.readlines()
+    with open(data_dir_prefix + f'_{test_str}{"_" if test_str!="" else ""}lbl_file') as test_labels_file:
+        test_labels = test_labels_file.readlines()
+    with open(data_dir_prefix + f'_{test_str}{"_" if test_str!="" else ""}source_file') as test_lines_file:
+        test_lines = test_lines_file.readlines()
 
-        if os.path.isfile(data_dir_prefix + f'_{val_str}_lbl_file'):
-            with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
-                val_labels = val_labels_file.readlines()
-            with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
-                val_lines = val_lines_file.readlines()
+    if os.path.isfile(data_dir_prefix + f'_train_lbl_file'):
+        with open(data_dir_prefix + f'_train_lbl_file') as train_labels_file:
+            train_labels = train_labels_file.readlines()
+        with open(data_dir_prefix + f'_train_source_file') as train_lines_file:
+            train_lines = train_lines_file.readlines()
 
-        if os.path.isfile(data_dir_prefix + f'_{hard_val_str}_lbl_file'):
-            with open(data_dir_prefix + f'_{hard_val_str}_lbl_file') as hard_val_labels_file:
-                hard_val_labels = hard_val_labels_file.readlines()
-            with open(data_dir_prefix + f'_{hard_val_str}_source_file') as hard_val_lines_file:
-                    hard_val_lines = hard_val_lines_file.readlines()
+    if os.path.isfile(data_dir_prefix + f'_{val_str}_lbl_file'):
+        with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
+            val_labels = val_labels_file.readlines()
+        with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
+            val_lines = val_lines_file.readlines()
 
-        if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
-                os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
-            with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
-                hard_test_labels = hard_test_labels_file.readlines()
-            with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
-                hard_test_lines = hard_test_lines_file.readlines()         
+    if os.path.isfile(data_dir_prefix + f'_{hard_val_str}_lbl_file'):
+        with open(data_dir_prefix + f'_{hard_val_str}_lbl_file') as hard_val_labels_file:
+            hard_val_labels = hard_val_labels_file.readlines()
+        with open(data_dir_prefix + f'_{hard_val_str}_source_file') as hard_val_lines_file:
+                hard_val_lines = hard_val_lines_file.readlines()
+
+    if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
+            os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
+        with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
+            hard_test_labels = hard_test_labels_file.readlines()
+        with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
+            hard_test_lines = hard_test_lines_file.readlines()         
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if 'gpt' in model_name:
@@ -535,11 +443,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     size_test = batches * bs_test if batches > 0 else 10 ** 8
 
-    if data_dir_prefix == 'fever':
-        all_labels_text = ["SUPPORTS", "REFUTES", "NOT-ENOUGH-INFO"]
-        # all_labels_text = ['A','B','C']
-        # all_labels_text = ['A','B']
-    elif 'hans' in data_dir_prefix:
+    if 'hans' in data_dir_prefix:
         all_labels_text = ["contradiction\n", "entailment\n", "neutral\n"]
     else:
         size_train = 10**8
@@ -549,12 +453,6 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             ))
     all_labels_text.sort()  
     ratios = None
-    # if calc_uniform:
-    #     ratios = [1/3,1/3,1/3]
-    #     # pdb.set_trace()
-    #     for i,l in enumerate(all_labels_text):
-    #         rate = len([sam for sam in train_labels if sam==l]) / len(train_labels)
-    #         ratios[i] = rate
 
     num_labels = len(all_labels_text)
 
@@ -564,14 +462,9 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         labels_ids = [tokenizer.encode(label, add_special_tokens=False)[0] for label in all_labels]
         # labels_ids = [2870,2874,2876]
         print(f'Labels IDs: {labels_ids}')
-        # if tokenizer_decoder is not None:
-        #     tokenizer_decoder.add_tokens(all_labels)
-        #     labels_ids_decoder = [tokenizer_decoder.encode(label, add_special_tokens=False)[0] for label in all_labels]
-        #     print(f'Labels IDs for decoder: {labels_ids_decoder}')
 
     dataset = None
     trainer_type = None
-    # pdb.set_trace()
     data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
     dataloader_args = {}
     train_args = {'reduction':reduction, 'ratios':ratios, 'save_likelihoods':save_likelihoods}
@@ -600,9 +493,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             trainer_type = GenerativeTrainer
         else:
             trainer_type = OnelabelTrainer
-        # data_args['tokenizer_decoder'] = tokenizer_decoder
-        # data_args['generate_hypothesis'] = generate_hypothesis
-        # pdb.set_trace()
+
         train_args['possible_labels_ids'] = labels_ids
         train_args['tokenizer_encoder'] = tokenizer
         train_args['tokenizer_decoder'] = tokenizer_decoder
@@ -627,7 +518,6 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         attribution_tokenizer = model_name
     data_args['attribution_tokenizer'] = attribution_tokenizer
 
-    # import pdb; pdb.set_trace()
     if attribution_map is not None:
         data_args['attribution_map'] = attribution_paths[0]
     if 'mnli' in data_dir_prefix:
@@ -661,7 +551,6 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
 
     if batches > 0:
         ds_test = Subset(ds_test, range(batches * bs_test))
-        # ds_val = Subset(ds_val, range(batches * bs_test))
 
     model = get_model(tokenizer=tokenizer, tokenizer_decoder=tokenizer_decoder, model=model_type, model_name=model_name,
                       decoder_model_name=decoder_model_name, model_path=model_path, num_labels=num_labels)
@@ -674,15 +563,13 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     dl_train = torch.utils.data.DataLoader(ds_train, bs_test, shuffle=False, **dataloader_args)
 
     writer = None
-    # if checkpoints is None:
-    #     writer = SummaryWriter()
     if val:
         dl_test = dl_val
         hard_test_lines = hard_val_lines
 
     trainer = trainer_type(model, optimizer=None, scheduler=None, device=device, **train_args)
-    fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    # fit_res = trainer.test(dl_train, checkpoints=checkpoints, writer=writer)#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    fit_res = trainer.test(dl_test, checkpoints=checkpoints, writer=writer)
+
     save_experiment(run_name, out_dir, cfg, fit_res)
     if hard_test_lines is not None and len(hard_test_lines) > 0:
         if hasattr(trainer, 'save_results') and trainer.save_results is not None:
@@ -736,7 +623,6 @@ def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
     model.config.max_length = 32
     model.config.task_specific_params['summarization']['min_length'] = 5
     model.config.task_specific_params['summarization']['max_length'] = 32
-    # import pdb; pdb.set_trace()
     model.to(device)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -984,11 +870,6 @@ def parse_cli():
     sp_exp.add_argument('--weight-decay', '-wd', type=float,
                         default=0.0)
     sp_exp.add_argument('--gamma', type=float, default=0.0)
-    # sp_exp.add_argument('--hidden-dims', '-H', type=int, nargs='+',
-    #                     help='Output size of hidden linear layers',
-    #                     metavar='H', required=True)
-    # sp_exp.add_argument('--ycn', action='store_true', default=False,
-    #                     help='Whether to use your custom network')
 
     # TEST
     sp_test = sp.add_parser('test', help='Test model on test set')
@@ -999,8 +880,6 @@ def parse_cli():
                          default='./results_test', required=False)
     sp_test.add_argument('--seed', '-s', type=int, help='Random seed',
                          default=None, required=False)
-    # sp_test.add_argument('--drive', '-d', type=bool, help='Pass "True" if you are running this on Google Colab',
-    #                      default=False, required=False)
     sp_test.add_argument('--save-results', '-sr', type=str, help='Pass path if you want to save the results',
                          default=None, required=False)
     sp_test.add_argument('--reduction', '-reduce', type=str,
@@ -1068,7 +947,7 @@ def parse_cli():
     sp_test.add_argument('--premise-only', '-po', dest='premise_only', action='store_true')
     sp_test.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
     sp_test.add_argument('--generate-hypothesis', '-gh', dest='generate_hypothesis', action='store_true')
-    sp_test.add_argument('--val', '-val', dest='val', action='store_true')
+    sp_test.add_argument('--val', '-val', dest='val',help='Run on dev set instead of training set', action='store_true')
     sp_test.add_argument('--use_dev_test', action='store_true')
     sp_test.set_defaults(hypothesis_only=False, generate_hypothesis=False, premise_only=False, pure_gen=False, val=False, use_dev_test=False)
     sp_test.add_argument('--save-likelihoods', '-sl', type=str, help='Pass path if you want to save the likelihoods as a torch tensor',
@@ -1124,8 +1003,6 @@ def parse_cli():
         sys.exit()
     return parsed
 
-
-# run_experiment("dimi", data_dir_prefix="../data/scitail/cl_scitail", bs_train=8, bs_test=4)
 
 if __name__ == '__main__':
     import os

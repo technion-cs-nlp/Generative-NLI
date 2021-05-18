@@ -2,24 +2,6 @@ import torch.nn as nn
 import os
 import torch
 
-class HybridModel(nn.Module):
-    def __init__(self, model1, model2, gamma):
-        super().__init__()
-        self.model1 = model1
-        self.model2 = model2
-        self.gamma = gamma
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    def forward(self, args1, args2,**kwargs):
-        out1 = self.model1(**args1)
-        loss1 = out1[0]
-        out2 = self.model2(**args2)
-        loss2 = out2[0]
-        # import pdb; pdb.set_trace()
-        batch_size = loss2.shape[0]
-        res = (1-self.gamma) * loss1.view(batch_size,-1).mean(1) + (self.gamma) * loss2
-        return res
-
 
 def freeze_params(params, ratio):
     for idx, param in enumerate(params):
@@ -65,13 +47,6 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
                 res_model.config.encoder.vocab_size = len(tokenizer)
                 res_model.config.vocab_size = len(tokenizer)
 
-        # if tokenizer_decoder is None:
-        #     res_model.config.decoder_start_token_id = tokenizer.cls_token_id
-        #     res_model.config.eos_token_id = tokenizer.sep_token_id
-        #     res_model.config.pad_token_id = tokenizer.pad_token_id
-        # else:
-        #     res_model.config.decoder_start_token_id = tokenizer_decoder.bos_token_id
-        #     res_model.config.eos_token_id = tokenizer_decoder.eos_token_id
         res_model.config.max_length = 64
         res_model.config.min_length = 5
         res_model.config.no_repeat_ngram_size = 3
@@ -90,14 +65,9 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
             # add cross attention layers and use BERT's cls token as BOS token and sep token as EOS token
             decoder = BertGenerationDecoder.from_pretrained(model_name, add_cross_attention=True, is_decoder=True, bos_token_id=101, eos_token_id=102)
             bert2bert = EncoderDecoderModel(encoder=encoder, decoder=decoder, tie_encoder_decoder=tie_encoder_decoder)
-            # if tie_encoder_decoder:
-            #     # import pdb; pdb.set_trace()
-            #     bert2bert.config.tie_encoder_decoder=True
-            #     bert2bert.tie_weights()
             if label is None:
                     bert2bert.encoder.resize_token_embeddings(len(tokenizer))
                     bert2bert.config.encoder.vocab_size = len(tokenizer)
-            # bert2bert.config.vocab_size = res_model.config.encoder.vocab_size
         else:
             from transformers import EncoderDecoderModel
             bert2bert = EncoderDecoderModel.from_pretrained(model_path)
@@ -145,26 +115,6 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
                 res_model.config.pad_token_id = tokenizer.pad_token_id
         else:
             res_model = AutoModelForSequenceClassification.from_pretrained(model_path)
-
-    elif model == 'hybrid':
-        from transformers import AutoModelForSequenceClassification
-        if 'bart' in model_name:
-            from transformers import BartForConditionalGeneration
-            model1 = BartForConditionalGeneration.from_pretrained(model_name)
-        else:
-            model1 = get_model('encode-decode',model_name,tokenizer,tokenizer_decoder,
-                    decoder_model_name,model_path,param_freezing_ratio,num_labels,tie_embeddings,
-                    label,gamma)
-        model2 = AutoModelForSequenceClassification.from_pretrained(model_name)
-        if 'bart' in model_name:
-            del model2.model
-            model2.model = model1.model
-            model1.resize_token_embeddings(len(tokenizer))
-        else:
-            del model2.bert
-            model2.bert = model1.decoder.bert
-        res_model = HybridModel(model1,model2,gamma)
-        return res_model
 
     else: 
         print(f"Please pick a valid model in {model_list}")

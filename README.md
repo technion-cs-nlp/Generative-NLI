@@ -1,12 +1,17 @@
-# PremiseGeneratorBert
+# Ubart
 
-Use `enviorment.yml` file with conda to install neccecery modules:
+Use `environment.yml` file with conda to install neccecery modules:
 
 ```
  conda env update -f environment.yml
 ```
 
-Then, clone and install this fork of `Huggingface` according to the instruction in this git: <https://github.com/dimi1357/transformers.git>.
+Then, install this moded vertion of `Huggingface` transformers:
+```
+cd transformers/
+pip install -e .
+cd..
+```
 
 Availble commands (python main.py -h to see this menu)
 
@@ -47,6 +52,11 @@ python -n NAME --checkpoints <path to checkpoints> --model-type disc -ho --model
 Fine-tune a model (same as paper):
 ```
 python -n NAME --checkpoints <path to checkpoints> -lr 5e-6 --model-path <path to generative model> -hom <path to hypothesis-only model> --model-type bart --model-name facebook/bart-base --gamma 1.0
+```
+
+Train full pipeline:
+```
+main.py pipeline -n NAME --word-dropout WORD_DROPOUT --hyp-only-model HYP_ONLY_MODEL --model-name MODEL_NAME --weight-decay WEIGHT_DECAY
 ```
 
 Full list of arguments:

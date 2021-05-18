@@ -45,10 +45,7 @@ if not os.path.isfile("stats.torch"):
         with open(data_dir_prefix + '_test_hard_source_file') as val_lines_file:
             hard_test_lines = val_lines_file.readlines()
 
-    # data_args = {}
-    # dataset = DiscriminativeDataset
-    # tokenizer = None
-    # max_len = 0
+
     tokenizer_attr = AutoTokenizer.from_pretrained('facebook/bart-base')
 
     res = {}
@@ -83,19 +80,6 @@ if not os.path.isfile("stats.torch"):
                         
                         premise_encoded = tokenizer_attr(premise,return_tensors='pt').input_ids.view(-1)
                         premise_len = len(premise_encoded)
-                        # for label in range(3):
-                        #     if attribution_map[index] is None or None in attribution_map[index]:
-                        #         premise_attr = torch.ones_like(premise_encoded)
-                        #     # elif not type(attribution_map[index]) == list:
-                        #     #     premise_attr = attribution_map[index].view(-1)[:premise_len]
-                        #     else:
-                        #         premise_attr = attribution_map[index][label].view(-1)[:premise_len]
-
-                        #     mask = premise_attr >= 0
-                        #     premise_encoded_filtered = premise_encoded[mask]
-                        #     premise_filtered = tokenizer_attr.decode(premise_encoded_filtered,skip_special_tokens=True)
-                        #     source_file.write(f'{premise_filtered}|||{hypothesis}\n')
-                        #     lbl_file.write(f'{possible_labels[label]}\n')
                         premise_attr = attribution_map[index].view(-1)[:premise_len]
                         # import pdb; pdb.set_trace()
 

@@ -1,4 +1,4 @@
-name: dimi
+name: ubart
 channels:
   - pytorch
   - defaults
