@@ -7,7 +7,7 @@
 - [ ] One model for each label.
 - [ ] Joint loss objective.
 - [ ] Bert2GPT / Bert2Bert.
-- [ ] Attributions.
+- [X] Attributions.
 - [ ] FEVER.
 
 ## Missing from the paper:
