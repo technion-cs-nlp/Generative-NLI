@@ -1,17 +1,12 @@
 import argparse
 import json
 import os
-import pdb
 import random
 import sys
-from threading import Thread
 
 import numpy as np
 
 import torch
-from torch.nn import parameter
-from torch.utils import data
-import torchvision
 from torch.utils.data import Subset
 from transformers import AutoTokenizer, AdamW, \
     get_linear_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup, \
@@ -32,7 +27,7 @@ def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
 
 def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1.0/cl_snli', model_path=None,
                    model_name='bert-base-uncased', model_type='encode-decode', decoder_model_name=None, seed=None,
-                   drive=False, do_test=True, gen_premise='', 
+                   drive=False, do_test=True, gen_premise='',
                    # Training params
                    bs_train=16, bs_test=8, batches=0, epochs=20,
                    early_stopping=3, checkpoints=None, lr=1e-5, reg=1e-3, max_len=0, decoder_max_len=0,
@@ -42,10 +37,10 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    # Model params
                    beta1=0.9, beta2=0.999, epsilon=1e-6, weight_decay=0.0, param_freezing_ratio=0.0,
                    gradual_unfreeze=False,
-                   ret_res=False, gamma=0.0, tie_encoder_decoder=False, 
+                   ret_res=False, gamma=0.0, tie_encoder_decoder=False,
                    # Dataset params
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False, misalign_bias=False,
-                   label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
+                   label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False,
                    attribution_tokenizer=None, premise_only=False, cheat=False, calc_uniform=False, pure_gen=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
@@ -53,8 +48,6 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if not bs_test:
         bs_test = max([bs_train // 4, 1])
     cfg = locals()
-
-    tf = torchvision.transforms.ToTensor()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -83,27 +76,27 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     with open(data_dir_prefix + f'_{test_str}_lbl_file') as test_labels_file:
         test_labels = test_labels_file.readlines()
-    
+
     with open(data_dir_prefix + f'_{test_str}_source_file') as test_lines_file:
         test_lines = test_lines_file.readlines()
-    
+
     with open(data_dir_prefix + f'_train_{gen_premise}lbl_file') as train_labels_file:
         train_labels = train_labels_file.readlines()
-    
+
     with open(data_dir_prefix + f'_train_{gen_premise}source_file') as train_lines_file:
         train_lines = train_lines_file.readlines()
-    
+
     with open(data_dir_prefix + f'_{val_str}_lbl_file') as val_labels_file:
         val_labels = val_labels_file.readlines()
-    
+
     with open(data_dir_prefix + f'_{val_str}_source_file') as val_lines_file:
         val_lines = val_lines_file.readlines()
-    
+
     if os.path.isfile(data_dir_prefix + f'_{test_str}_hard_lbl_file') and \
             os.path.isfile(data_dir_prefix + f'_{test_str}_hard_source_file'):
         with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
             hard_test_labels = hard_test_labels_file.readlines()
-            
+
         with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
             hard_test_lines = hard_test_lines_file.readlines()
 
@@ -144,12 +137,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         ))
     all_labels_text.sort()
     ratios = None
-    
+
     num_labels = len(all_labels_text)
     if label is not None:
         if model_type.startswith('disc'):
             raise AttributeError("Can't specify label with discriminative model")
-    
+
     elif not model_type.startswith('disc'):
         all_labels = ['[' + l.lower().strip() + ']' for l in all_labels_text]
         tokenizer.add_tokens(all_labels)
@@ -183,7 +176,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                     }
                 ]
                 hyp.requires_grad_ = True
-            else: 
+            else:
                 hyp.requires_grad_ = False
         else:
             hyp = get_model(model='discriminative',
@@ -214,7 +207,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         train_args['tokenizer_decoder'] = tokenizer_decoder
         train_args['gradual_unfreeze'] = gradual_unfreeze
         train_args['gamma'] = gamma
-        
+
     elif model_type.startswith('disc'):
         trainer_type = DiscriminativeTrainer
         train_args['num_labels'] = num_labels
@@ -256,7 +249,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         data_args['attribution_map'] = attribution_paths[0]
     data_args['filt_method'] = filt_method if filt_method != 'none' else 'true'
     ds_train = dataset(train_lines, train_labels, tokenizer, max_len=max_len, **data_args)
-    
+
     if batches > 0:
         ds_train = Subset(ds_train, range(batches * bs_train))
 
@@ -319,7 +312,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     trainer = trainer_type(model, optimizer, scheduler, max_len=max_len, device=device, **train_args)
     fit_res = trainer.fit(dl_train, dl_val, num_epochs=epochs, early_stopping=early_stopping, checkpoints=checkpoints,
                           drive=drive, writer=writer)
-    
+
     if ret_res:
         del model
         return fit_res.test_acc[-4] if len(fit_res.test_acc) >= 4 else fit_res.test_acc[-1]
@@ -329,7 +322,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     if hyp is not None:
         del hyp
     torch.cuda.empty_cache()
-    
+
     if do_test:
         print('_'*50)
         test_model(run_name, out_dir+"_test", data_dir_prefix, model_name, checkpoints+"_model", model_type, decoder_model_name, seed, None,
@@ -358,8 +351,6 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if not bs_test:
         bs_test = 1
     cfg = locals()
-
-    tf = torchvision.transforms.ToTensor()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -429,7 +420,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
         with open(data_dir_prefix + f'_{test_str}_hard_lbl_file') as hard_test_labels_file:
             hard_test_labels = hard_test_labels_file.readlines()
         with open(data_dir_prefix + f'_{test_str}_hard_source_file') as hard_test_lines_file:
-            hard_test_lines = hard_test_lines_file.readlines()         
+            hard_test_lines = hard_test_lines_file.readlines()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if 'gpt' in model_name:
@@ -451,7 +442,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
             # test_labels[:size_test] + train_labels[:size_train] + val_labels[:size_test] + hard_test_labels[:size_test]))
             train_labels# + test_labels + val_labels# + (hard_test_labels if hard_test_labels is not None else [])
             ))
-    all_labels_text.sort()  
+    all_labels_text.sort()
     ratios = None
 
     num_labels = len(all_labels_text)
@@ -546,7 +537,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     data_args.pop('attribution_map',None)
     ds_val = dataset(val_lines, val_labels, tokenizer, **data_args)
     ds_hard_val = dataset(hard_val_lines, hard_val_labels, tokenizer, **data_args)
-    
+
     ds_train = dataset(train_lines, train_labels, tokenizer, **data_args)
 
     if batches > 0:
@@ -561,7 +552,7 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
     dl_hard_val = torch.utils.data.DataLoader(ds_hard_val, bs_test, shuffle=False, **dataloader_args)
     dl_train = torch.utils.data.DataLoader(ds_train, bs_test, shuffle=False, **dataloader_args)
-
+    
     writer = None
     if val:
         dl_test = dl_val
@@ -641,7 +632,7 @@ def generate_dataset(data_dir_prefix='./data/snli_1.0/cl_snli_train', bs_test=8,
     dataset = DiscriminativeDataset(lines, labels, tokenizer)
     dataloader = torch.utils.data.DataLoader(dataset, bs_test, shuffle=False)
 
-    trainer = GenerativeTrainer(model=model, optimizer=None, scheduler=None, possible_labels_ids=labels_ids, 
+    trainer = GenerativeTrainer(model=model, optimizer=None, scheduler=None, possible_labels_ids=labels_ids,
                                 tokenizer_encoder=tokenizer, save_results=save_results, device=device, generate_all_labels=generate_all_labels)
     trainer.generate_dataset(dataloader)
 
@@ -669,7 +660,7 @@ def pipeline(run_name, hyp_only_model=None, model_name='facebook/bart-base', tra
         hyp_run_name = f'{run_name}_hyp_only'
         hyp_checkpoints = f'checkpoints/{hyp_run_name}'
         run_experiment(hyp_run_name, data_dir_prefix=data_dir_prefix,
-                   model_name=model_name, model_type='disc', seed=seed, 
+                   model_name=model_name, model_type='disc', seed=seed,
                    checkpoints=hyp_checkpoints, lr=lr, hypothesis_only=True)
         hyp_only_model = f'{hyp_run_name}_model'
     else:
@@ -679,14 +670,14 @@ def pipeline(run_name, hyp_only_model=None, model_name='facebook/bart-base', tra
 
     model_path = f'{checkpoints}_model'
     if not os.path.isdir(model_path):
-        ## Train p(P|y,H)*p(y|H) 
+        ## Train p(P|y,H)*p(y|H)
         print("********************** Training p(P|y,H)*p(y|H) model **********************")
         run_experiment(run_name, data_dir_prefix=data_dir_prefix, model_name=model_name, model_type=model_type, seed=seed, bs_train=bs_train, bs_test=bs_test,
-                    checkpoints=checkpoints, lr=lr, word_dropout=word_dropout, hyp_only_model=hyp_only_model, hard_validation=False, 
+                    checkpoints=checkpoints, lr=lr, word_dropout=word_dropout, hyp_only_model=hyp_only_model, hard_validation=False,
                     weight_decay=weight_decay, attribution_map=attribution_map, train_hyp=train_hyp, test_with_prior=True)
     else:
         print("********************** Using pre-trained p(P|y,H) model **********************")
-    
+
 
     print("********************** Testing p(P|y,H) model **********************")
     test_model(run_name=run_name, out_dir="results_test", data_dir_prefix=data_dir_prefix, model_name=model_name, bs_test=bs_test,
@@ -702,9 +693,9 @@ def pipeline(run_name, hyp_only_model=None, model_name='facebook/bart-base', tra
     # bs_test = 4 if 'large' in model_name else bs_test
 
     print("********************** Fine-tuning model (p(P|y,H)*p(y|H)) / (sum y' of p(P|y',H)*p(y'|H)) **********************")
-    run_experiment(ft_run_name, data_dir_prefix=data_dir_prefix, bs_train=bs_train, bs_test=bs_test, model_name=model_name, 
-    model_type=model_type, model_path=model_path, seed=seed, checkpoints=ft_checkpoints, lr=ft_lr, word_dropout=word_dropout, 
-    hyp_only_model=hyp_only_model, hard_validation=hard_validation, weight_decay=weight_decay, attribution_map=attribution_map, 
+    run_experiment(ft_run_name, data_dir_prefix=data_dir_prefix, bs_train=bs_train, bs_test=bs_test, model_name=model_name,
+    model_type=model_type, model_path=model_path, seed=seed, checkpoints=ft_checkpoints, lr=ft_lr, word_dropout=word_dropout,
+    hyp_only_model=hyp_only_model, hard_validation=hard_validation, weight_decay=weight_decay, attribution_map=attribution_map,
     gamma=1.0, test_with_prior=test_with_prior, epochs=ft_epochs)
     ft_model_path = f'{ft_checkpoints}_model'
 
@@ -714,7 +705,7 @@ def pipeline(run_name, hyp_only_model=None, model_name='facebook/bart-base', tra
 
     print("********************** Finished **********************")
 
-    
+
 
 
 def save_experiment(run_name, out_dir, config, fit_res):
@@ -772,16 +763,16 @@ def parse_cli():
     sp_exp.add_argument('--bias-location', type=str,
                         help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
                         default='start')
-    sp_exp.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative', 
+    sp_exp.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative',
                         dest='non_discriminative_bias', action='store_true')
     sp_exp.add_argument('--misalign_bias', '-mb', help='Bias token is misailgned with true label', action='store_true')
-    sp_exp.add_argument('--attribution-map', '-am', type=str, 
+    sp_exp.add_argument('--attribution-map', '-am', type=str,
                         help='path of attribution maps folder',
                         default=None)
-    sp_exp.add_argument('--filt-method', '-fm', type=str, 
+    sp_exp.add_argument('--filt-method', '-fm', type=str,
                         help='The method to filter the premis by. Should be in [sum,mean,max,max-abs,min-abs,true,rand',
                         default='none')
-    sp_exp.add_argument('--move-to-hypothesis', '-mth', help='Move the filtered words from the premise to the hypothesis', 
+    sp_exp.add_argument('--move-to-hypothesis', '-mth', help='Move the filtered words from the premise to the hypothesis',
                         dest='move_to_hypothesis', action='store_true')
 
     # # Training
@@ -884,7 +875,7 @@ def parse_cli():
                          default=None, required=False)
     sp_test.add_argument('--reduction', '-reduce', type=str,
                         help='How to reduce loss, can be "sum" or "mean"', default="sum")
-    sp_test.add_argument('--filt-method', '-fm', type=str, 
+    sp_test.add_argument('--filt-method', '-fm', type=str,
                         default='none')
 
     # # Inference
@@ -900,7 +891,7 @@ def parse_cli():
                          help='Length of longest sequence of the decoder (or bigger), 0 if you don\'t know', default=0)
     sp_test.add_argument('--create-premises', '-cp', dest='create_premises', action='store_true')
 
-    sp_test.add_argument('--attribution-map', '-am', type=str, 
+    sp_test.add_argument('--attribution-map', '-am', type=str,
                         help='path of attribution maps folder',
                         default=None)
     sp_test.add_argument('--threshold', '-th', type=float, default=0.0)
@@ -923,7 +914,7 @@ def parse_cli():
     sp_test.add_argument('--bias-location', type=str,
                         help='Select where in the hypotheses to inject the bias, can be either "start" or "end", otherwise will be random location',
                         default='start')
-    sp_test.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative', 
+    sp_test.add_argument('--non-discriminative-bias', '-ndb', help='Make the synthetic bias non-discriminative',
                         dest='non_discriminative_bias', action='store_true')
     sp_test.add_argument('--misalign_bias', '-mb', help='Bias token is misailgned with true label', action='store_true')
     sp_test.set_defaults(create_premises=False, move_to_hypothesis=False, test_with_prior=False, calc_uniform=False, reverse=False,
@@ -976,7 +967,7 @@ def parse_cli():
                      help='Name of run and output file', required=True)
     sp_pip.add_argument('--seed', '-s', type=int, help='Random seed',
                      default=None, required=False)
-    sp_pip.add_argument('--attribution-map', '-am', type=str, 
+    sp_pip.add_argument('--attribution-map', '-am', type=str,
                      help='path of attribution maps folder', default=None)
     sp_pip.add_argument('--data-dir-prefix', type=str,
                      help='Prefix of the path to data', default='./data/snli_1.0/cl_snli')
@@ -987,7 +978,7 @@ def parse_cli():
     sp_pip.add_argument('--train-hyp', dest='train_hyp', action='store_true')
     sp_pip.add_argument('--hard-validation', '-hv', dest='hard_validation', action='store_true')
     sp_pip.add_argument('--test-with-prior', '-twp', dest='test_with_prior', action='store_true')
-    
+
     sp_pip.set_defaults(hard_validation=False, train_hyp=False)
 
     sp_pip.add_argument('--model-name', type=str,
