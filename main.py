@@ -650,6 +650,8 @@ def pipeline(run_name, hyp_only_model=None, model_name='facebook/bart-base', tra
         model_type = 'bart'
     elif 'gpt' in model_name:
         model_type = 'decoder-only'
+    elif 't5' in model_name:
+        model_type = 't5'
     else:
         model_type = 'encode-decode'
     checkpoints = f'checkpoints/{run_name}'
@@ -975,6 +977,8 @@ def parse_cli():
                      help='Word dropout rate during training', default=0.0)
     sp_pip.add_argument('--hyp-only-model', '-hom', type=str,
                      help='If you want to weigh loss by htpothesis only output', default=None)
+    sp_pip.add_argument('--ft-epochs', '-fte', type=int, help='Number of epochs during fine-tuning',
+                        default=20)
     sp_pip.add_argument('--train-hyp', dest='train_hyp', action='store_true')
     sp_pip.add_argument('--hard-validation', '-hv', dest='hard_validation', action='store_true')
     sp_pip.add_argument('--test-with-prior', '-twp', dest='test_with_prior', action='store_true')
@@ -985,6 +989,7 @@ def parse_cli():
                      help='Name of the huggingface model', default='facebook/bart-base')
     sp_pip.add_argument('--weight-decay', '-wd', type=float,
                         default=0.0)
+
 
 
     parsed = p.parse_args()
