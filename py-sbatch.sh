@@ -31,7 +31,6 @@ NUM_GPUS=1
 JOB_NAME="Premise-generator"
 MAIL_USER="dimion@cs.technion.ac.il"
 MAIL_TYPE=ALL # Valid values are NONE, BEGIN, END, FAIL, REQUEUE, ALL
-QUEUE="nlp"
 
 
 ###
@@ -43,7 +42,6 @@ CONDA_ENV=dimi
 sbatch \
 	-N $NUM_NODES \
 	-c $NUM_CORES \
-	-p $QUEUE \
 	--gres=gpu:$NUM_GPUS \
 	--job-name $JOB_NAME \
 	--mail-user $MAIL_USER \
@@ -53,10 +51,10 @@ sbatch \
 #!/bin/bash
 echo "*** SLURM BATCH JOB '$JOB_NAME' STARTING ***"
 
-# Setup the conda env
-echo "*** Activating environment $CONDA_ENV ***"
-source $CONDA_HOME/etc/profile.d/conda.sh
-conda activate $CONDA_ENV
+#Setup the conda env
+#echo "*** Activating environment $CONDA_ENV ***"
+#source $CONDA_HOME/etc/profile.d/conda.sh
+#conda activate $CONDA_ENV
 
 # Run python with the args to the script
 python $@

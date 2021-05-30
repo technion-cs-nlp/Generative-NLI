@@ -275,11 +275,12 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     if torch.cuda.device_count()>1 and hyp is None:
         if hasattr(model, 'parallelize'):
+            #import pdb; pdb.set_trace()
             n_devices = torch.cuda.device_count()
             num_layers = model.config.num_layers if hasattr(model.config,'num_layers') else model.config.n_layer
             k = num_layers//n_devices
             device_map = {i:list(range(i*k,(i+1)*k)) for i in range(n_devices)}
-            # device_map = {0:[0], 1:list(range(1,num_layers))}
+            #device_map = {0:[0,1,2],1:[3,4,5,6,7,8,9],2:[10,11,12,13,14,15,16],3:[17,18,19,20,21,22,23]}
             model.parallelize(device_map)
         elif hasattr(model, 'encoder') and hasattr(model, 'decoder'):
             pass
@@ -555,7 +556,19 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     model = get_model(tokenizer=tokenizer, tokenizer_decoder=tokenizer_decoder, model=model_type, model_name=model_name,
                       decoder_model_name=decoder_model_name, model_path=model_path, num_labels=num_labels)
 
-    model.to(device)
+    if torch.cuda.device_count()>1 and hyp is None:
+        if hasattr(model, 'parallelize'):
+            #import pdb; pdb.set_trace()
+            n_devices = torch.cuda.device_count()
+            num_layers = model.config.num_layers if hasattr(model.config,'num_layers') else model.config.n_layer
+            k = num_layers//n_devices
+            device_map = {i:list(range(i*k,(i+1)*k)) for i in range(n_devices)}
+            #device_map = {0:[0,1,2],1:[3,4,5,6,7,8,9],2:[10,11,12,13,14,15,16],3:[17,18,19,20,21,22,23]}
+            model.parallelize(device_map)
+        elif hasattr(model, 'encoder') and hasattr(model, 'decoder'):
+            pass
+    else:
+        model.to(device)
 
     dl_test = torch.utils.data.DataLoader(ds_test, bs_test, shuffle=False, **dataloader_args)
     dl_val = torch.utils.data.DataLoader(ds_val, bs_test, shuffle=False, **dataloader_args)
