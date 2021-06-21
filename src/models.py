@@ -57,6 +57,7 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         return res_model
     
     else:
+        name = model_name
         model_name = model_path if model_path is not None else model_name
     if model == 'bert2bert':
         if model_path is None:
@@ -108,13 +109,17 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         return res_model
 
     elif 'discriminative'.startswith(model):
-        from transformers import AutoModelForSequenceClassification
-        if model_path is None:
-            res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels, return_dict=False)
-            if 'gpt' in model_name:
-                res_model.config.pad_token_id = tokenizer.pad_token_id
+        if 't5' in name:
+            from transformers import T5ForConditionalGeneration
+            res_model = T5ForConditionalGeneration.from_pretrained(model_name)
         else:
-            res_model = AutoModelForSequenceClassification.from_pretrained(model_path)
+            from transformers import AutoModelForSequenceClassification
+            if model_path is None:
+                res_model = AutoModelForSequenceClassification.from_pretrained(model_name,num_labels=num_labels, return_dict=False)
+                if 'gpt' in model_name:
+                    res_model.config.pad_token_id = tokenizer.pad_token_id
+            else:
+                res_model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
     else: 
         print(f"Please pick a valid model in {model_list}")
