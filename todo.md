@@ -1,8 +1,8 @@
 ### After the paper submission
 
 ## New:
-- [ ] Sentiment analysis (!!).
-- [ ] Hebrew summerize of the Thesis.
+- [X] Sentiment analysis (!!).
+- [X] Hebrew summerize of the Thesis.
 
 ## Didn't work:
 - [X] One model for each label.
