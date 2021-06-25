@@ -32,7 +32,8 @@ class DiscriminativeDataset(Dataset):
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
                  non_discriminative_bias=False, misalign_bias=False, seed=42, threshold=0.0, 
                  attribution_map=None, move_to_hypothesis=False, filt_method='true',
-                 attribution_tokenizer=None, possible_labels=None, rev=False, pure_gen=False, hypothesis_only=False, premise_only=False):
+                 attribution_tokenizer=None, possible_labels=None, rev=False, pure_gen=False, hypothesis_only=False, premise_only=False, 
+                 overlap=False, prompts=None, t5_disc=False):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         super().__init__()
@@ -70,6 +71,9 @@ class DiscriminativeDataset(Dataset):
         self.pure_gen = pure_gen
         self.premise_only = premise_only
         self.hypothesis_only = hypothesis_only
+        self.overlap = overlap
+        self.prompts = prompts
+        self.t5_disc = t5_disc
 
     def _create_hist(self):
         hist = defaultdict(lambda: defaultdict(int))
@@ -99,6 +103,26 @@ class DiscriminativeDataset(Dataset):
         premise = split[0]
         hypothesis = split[1].replace('\n', '')
         lbl = torch.tensor(self.labels[index])
+
+       # import pdb; pdb.set_trace()
+        if self.overlap:
+            premise_splited = premise.split()
+            hypothesis_splited = hypothesis.split()
+            premise_splited_new = []
+            hypothesis_splited_new = []
+            for word in set(premise_splited + hypothesis_splited):
+                if word in premise_splited and word in hypothesis_splited:
+                    hypothesis_splited_new.append(word)
+                else: 
+                    premise_splited_new.append(word)
+
+            premise, hypothesis = ' '.join(premise_splited_new), ' '.join(hypothesis_splited_new)
+
+        if self.prompts is not None:
+            premise = f"{self.prompts[0]} {premise}" if type(self.prompts)==list else f"{self.prompts} {premise}" 
+            hypothesis = f"{self.prompts[1]} {premise}" if type(self.prompts)==list and len(self.prompts)>1 else hypothesis
+            if self.hypothesis_only:
+                hypothesis = f"{premise} {hypothesis}"
 
         if self.attribution_map is not None and self.attribution_map[index] is not None:
             threshold = self.threshold
@@ -177,6 +201,8 @@ class DiscriminativeDataset(Dataset):
             return f'{premise}{self.tokenizer.sep_token}{hypothesis}', lbl
         elif self.hypothesis_only:
             # import pdb; pdb.set_trace()
+            if self.premise_only:
+                return premise,lbl
             return hypothesis, lbl
         return premise, hypothesis, lbl  # P, H, y
 

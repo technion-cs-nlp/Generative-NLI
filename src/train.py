@@ -125,7 +125,7 @@ class Trainer(abc.ABC):
     """
 
     def __init__(self, model, loss_fn, optimizer, scheduler, device='cpu', gradual_unfreeze=False, 
-                    save_likelihoods=None, hans=False):
+                    save_likelihoods=None, hans=False,prompts_tuning=False):
         """
         Initialize the trainer.
         :param model: Instance of the model to train.
@@ -149,6 +149,7 @@ class Trainer(abc.ABC):
         if self.save_likelihoods is not None:
             self.likelihoods = []
         self.hans = hans
+        self.prompts_tuning = prompts_tuning
 
     @staticmethod
     def _loss_mean(loss, attention):
@@ -339,9 +340,12 @@ class Trainer(abc.ABC):
                 # self.model.save_pretrained(model_filename)
                 if not os.path.isdir(model_filename):
                     os.makedirs(model_filename)
-
-                self.model.save_pretrained(model_filename)
-                print(f'*** Saved model {model_filename} ')
+                if not self.prompts_tuning:
+                    self.model.save_pretrained(model_filename)
+                    print(f'*** Saved model {model_filename} ')
+                else: 
+                    torch.save(self.model.get_input_embeddings(),f"{model_filename}_embeddings.torch")
+                    print(f'*** Saved embeddings {model_filename}_embeddings.torch ')
 
                 if hasattr(self,'hyp_prior_model') and self.hyp_prior_model is not None and self.hyp_prior_model.requires_grad_:
                     self.hyp_prior_model.save_pretrained(f'{model_filename}_disc_prior')
@@ -501,6 +505,9 @@ class Trainer(abc.ABC):
                     num_eval_batches += 1
 
                 try:
+                    #if batch_idx == 103:
+                    #    import pdb;pdb.set_trace()
+
                     batch_res = forward_fn(data)
                 except RuntimeError as e:
                     torch.cuda.empty_cache()
@@ -536,11 +543,11 @@ class Trainer(abc.ABC):
 class GenerativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
-                 create_premises=False, gradual_unfreeze=False, clip=False, gamma=0.0,
+                 create_premises=False, clip=False, gamma=0.0,
                  rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
-                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, device=None, ratios=None, 
-                 save_likelihoods=None, generate_all_labels=False, hans=False, **kwargs):
-        super().__init__(model, None, optimizer, scheduler, device=device, gradual_unfreeze=gradual_unfreeze, save_likelihoods=save_likelihoods,hans=hans)
+                 mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, 
+                 device=None, ratios=None, generate_all_labels=False, **kwargs):
+        super().__init__(model, None, optimizer, scheduler, device=device, **kwargs)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
         self.tokenizer_decoder = tokenizer_decoder if tokenizer_decoder is not None else tokenizer_encoder
@@ -692,6 +699,12 @@ class GenerativeTrainer(Trainer):
         if self.model.config.architectures is not None and (any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures)):
                 decoder_input_ids = None
                 # labels = y
+        if self.prompts_tuning:
+            n_tokens = self.model.get_input_embeddings().n_tokens
+            orig_x = x.clone()
+            x = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), x], 1)
+            encoder_attention_mask = torch.cat([torch.full((batch_size,n_tokens), 1).to(self.device), encoder_attention_mask], 1)
+            labels = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), labels], 1)
 
         model_kwargs = {
             "attention_mask": encoder_attention_mask,
@@ -714,7 +727,7 @@ class GenerativeTrainer(Trainer):
         loss = self._reduce(loss, attention, reduction=self.reduction)
         if self.ratios is not None:
             # import pdb; pdb.set_trace()
-            rates = torch.tensor([self.ratios[i] for i in batch[2]],device=self.device)
+            rates = torch.tensor([self.ratios[i] for i in batch[-1]],device=self.device)
             rates = -(rates).log()
             loss = loss + rates
         # if self.hyp_prior_model is not None:
@@ -728,20 +741,26 @@ class GenerativeTrainer(Trainer):
         if self.gamma > 0.0:  ## Joint
             losses = [loss.clone()]
             for delta in range(1, len(self.labels)):
-                bad_x = x.clone().to(self.device)
+                if self.prompts_tuning:
+                    bad_x = x_orig.clone().to(self.device)
+                else:
+                    bad_x = x.clone().to(self.device)
                 # labels_tokens = ((bad_x[:, 1] - min_label + delta) % (len(self.labels))) + min_label # a very complicated way to change all the labels
                 # import pdb; pdb.set_trace()
                 labels_tokens = torch.tensor([self._next_label(l,delta) for l in bad_x[:, label_loc]])
                 bad_x[:, label_loc] = labels_tokens
+                if self.prompts_tuning:
+                    n_tokens = self.model.get_input_embeddings().n_tokens
+                    bad_x = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), bad_x], 1)
                 bad_out = self.model(input_ids=bad_x, **model_kwargs)
                 bad_loss = bad_out[0]
                 bad_loss = bad_loss.view(batch_size, -1)
                 bad_loss = self._reduce(bad_loss, attention, reduction=self.reduction)
                 # import pdb; pdb.set_trace()
                 if self.hyp_prior_model is not None:
-                    bad_labels = (batch[2] + delta) % self.num_labels
-                    batch_batch = (None, batch[1], bad_labels)
-                    bad_prior = self.calc_disc_loss(batch_batch)
+                    bad_labels = (batch[-1] + delta) % self.num_labels
+                    bad_batch = (None, batch[1], bad_labels)
+                    bad_prior = self.calc_disc_loss(bad_batch)
                     bad_loss += bad_prior
 
                 losses.append(bad_loss)
@@ -858,7 +877,7 @@ class GenerativeTrainer(Trainer):
                 bad_loss = bad_loss.view(batch_size, -1)
                 bad_loss = self._reduce(bad_loss, attention, reduction=self.reduction)
                 if self.hyp_prior_model is not None:
-                    bad_labels = (batch[2] + delta) % self.num_labels
+                    bad_labels = (batch[-1] + delta) % self.num_labels
                     batch_batch = (None, batch[1], bad_labels)
                     bad_prior = self.calc_disc_loss(batch_batch)
                     bad_loss += bad_prior
@@ -1074,7 +1093,7 @@ class GenerativeTrainer(Trainer):
         return BatchResult(tot, num_correct.item())
 
     def calc_disc_loss(self, batch):
-        batch_hyp_only = (batch[1], batch[2])  # H, y
+        batch_hyp_only = batch[-2:]  # H, y
         y_hyp, attention_mask_hyp, labels_hyp, token_type_ids_hyp = self._prepare_batch_disc(batch_hyp_only)
         y_hyp = y_hyp.to(self.hyp_prior_model.device)
         attention_mask_hyp = attention_mask_hyp.to(self.hyp_prior_model.device)
@@ -1083,7 +1102,7 @@ class GenerativeTrainer(Trainer):
         args = {
             'input_ids':y_hyp,
             'attention_mask':attention_mask_hyp,
-            'labels':batch[2].to(self.hyp_prior_model.device)
+            'labels':batch[-1].to(self.hyp_prior_model.device)
         }
         if token_type_ids_hyp is not None:
             token_type_ids_hyp = token_type_ids_hyp.to(self.hyp_prior_model.device)
@@ -1125,7 +1144,7 @@ class GenerativeTrainer(Trainer):
             else:
                 batch_size = len(batch[0][0])
                 # import pdb; pdb.set_trace()
-                correct_labels = torch.tensor([self.labels[l] for l in batch[2]])
+                correct_labels = torch.tensor([self.labels[l] for l in batch[-1]])
                 for i in range(len(self.labels)):
                     temp_labels = torch.zeros(batch_size,dtype=int)+i
                     temp_batch = ((batch[0][i]), batch[1][i], temp_labels)
@@ -1163,6 +1182,16 @@ class GenerativeTrainer(Trainer):
             if self.model.config.architectures is not None and (any('Bart' in elem for elem in self.model.config.architectures) or any('T5' in elem for elem in self.model.config.architectures)):
                 decoder_input_ids = None
                 # labels = inp_y
+            
+            if self.prompts_tuning:
+                n_tokens = self.model.get_input_embeddings().n_tokens
+                orig_x = inp_x.clone()
+                inp_x = torch.cat([torch.full((3*batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), inp_x], 1)
+                inp_e_a_m = torch.cat([torch.full((3*batch_size,n_tokens), 1).to(self.device), inp_e_a_m], 1)
+                if decoder_input_ids is not None:
+                    decoder_input_ids = torch.cat([torch.full((3*batch_size,n_tokens), -100).to(self.device), decoder_input_ids], 1)
+                inp_d_a_m = torch.cat([torch.full((3*batch_size,n_tokens), 1).to(self.device), inp_d_a_m], 1)
+                labels = torch.cat([torch.full((3*batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), labels], 1)
 
             model_kwargs = {
                 "input_ids":inp_x,
@@ -1279,7 +1308,7 @@ class GenerativeTrainer(Trainer):
         pred = pred.to('cpu')
         # if batch[2] is None:
             # return pred
-        correct_labels = batch[2].to('cpu')
+        correct_labels = batch[-1].to('cpu')
         num_correct = torch.sum(pred == correct_labels).type(torch.FloatTensor)
 
         # pdb.set_trace()
@@ -1290,7 +1319,8 @@ class GenerativeTrainer(Trainer):
                     f.write('pairID,gold_label\n')
             with open(self.save_results + '.csv', 'a') as f:
                 for l in pred.tolist():
-                    label = self.tokenizer_decoder.decode(self.labels[l])
+                    #label = self.tokenizer_decoder.decode(self.labels[l])
+                    label = self.tokenizer_decoder.decode(l)
                     label = label.replace('[', '').replace(']', '')
                     f.write(f'{self.mnli_ids[self.index]},{label}\n')
                     self.index += 1
@@ -1408,6 +1438,8 @@ class DiscriminativeTrainer(Trainer):
             H = list(H)
             input_dict = self.tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt', truncation=True)
 
+            if self.model.config.architectures is not None and any('T5' in elem for elem in self.model.config.architectures):
+                pass
         batch_encoded = [input_dict[item].to(self.device) for item in ['input_ids', 'attention_mask']]
         batch_encoded += [labels.to(self.device)]
 
@@ -1449,7 +1481,7 @@ class DiscriminativeTrainer(Trainer):
         loss, logits = outputs[:2]
 
         if self.hyp_prior_model is not None:
-            batch_hyp = (batch[1], batch[2])
+            batch_hyp = batch[-2:]
             x_hyp, attention_mask_hyp, labels_hyp, token_type_ids_hyp = self._prepare_batch(batch_hyp)
             x_hyp, attention_mask_hyp, labels_hyp, token_type_ids_hyp = x_hyp.to(self.device), attention_mask_hyp.to(
                 self.device), labels_hyp.to(self.device), token_type_ids_hyp.to(self.device)
