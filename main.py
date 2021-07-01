@@ -47,7 +47,8 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    inject_bias=0, bias_ids=[30000, 30001, 30002], bias_ratio=0.5, bias_location='start', non_discriminative_bias=False, misalign_bias=False,
                    label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
                    attribution_tokenizer=None, premise_only=False, cheat=False, calc_uniform=False, pure_gen=False, 
-                   overlap=False, prompts_tuning=False, embeddings_path=None):
+                   overlap=False, prompts_tuning=False, embeddings_path=None, joint_prob=False, tokenizer_hyp=None, 
+                   bias_model_name=None,):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -161,19 +162,25 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     trainer_type = None
     data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen,
                  'overlap':overlap}
+    if model_type.startswith('disc') and 't5' in model_name:
+        data_args['t5_disc'] = True
     dataloader_args = {}
-    train_args = {'reduction': reduction, 'ratios':ratios}
+    if tokenizer_hyp is not None:
+        tokenizer_hyp = AutoTokenizer.from_pretrained(tokenizer_hyp)
+    train_args = {'reduction': reduction, 'ratios':ratios, 'joint_prob': joint_prob}
+    train_args['tokenizer_hyp'] = tokenizer_hyp
 
     hyp = None
     optimizer_grouped_parameters = []
     if hyp_only_model is not None:
-        if torch.cuda.device_count() > 1:
+        if torch.cuda.device_count() > 1 and model_type != 't5':
             hyp_device = torch.device('cuda:1')
         else:
             hyp_device = device
         if os.path.isdir(hyp_only_model):
             hyp = get_model(model='discriminative',
-                            model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                            model_name= bias_model_name if bias_model_name is not None
+                            else (decoder_model_name if decoder_model_name is not None else model_name),
                             model_path=hyp_only_model, num_labels=num_labels)
             hyp = hyp.to(hyp_device)
             if train_hyp:
@@ -262,7 +269,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
 
     model = get_model(tokenizer=tokenizer,
                       tokenizer_decoder=tokenizer_decoder,
-                      model=model_type,
+                      model=model_type if 't5' not in model_name else 't5',
                       model_name=model_name,
                       decoder_model_name=decoder_model_name,
                       model_path=model_path,
@@ -287,6 +294,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         for param in model.parameters():
             param.requires_grad = False
         model.set_input_embeddings(s_wte)
+        #import pdb; pdb.set_trace()
         train_args['prompts_tuning'] = True
 
     if torch.cuda.device_count()>1 and hyp is None:
@@ -866,6 +874,10 @@ def parse_cli():
                         default', default=0.0)
     sp_exp.add_argument('--hyp-only-model', '-hom', type=str,
                         help='If you want to weigh loss by htpothesis only output', default=None)
+    sp_exp.add_argument('--tokenizer-hyp', type=str, 
+                         help="pass the type for the bias-model or path to the tokenizer", default=None)
+    sp_exp.add_argument('--bias-model-name', '-bmn', type=str, 
+                         help="pass the type for the bias-model, if it different than the main model", default=None)
     sp_exp.add_argument('--attribution-tokenizer', '-at', type=str,
                         help='Huggingface model name for the attributions, default is same as encoder', default=None)
     sp_exp.add_argument('--threshold', '-th', type=float, default=0.0)
@@ -887,12 +899,13 @@ def parse_cli():
     sp_exp.add_argument('--tie-encoder-decoder', '-ted', dest='tie_encoder_decoder', action='store_true')
     sp_exp.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
     sp_exp.add_argument('--prompts-tuning', '-pt', dest='prompts_tuning', action='store_true')
+    sp_exp.add_argument('--joint-prob', '-jp', dest='joint_prob', action='store_true')
 
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
                         generate_hypothesis=False, non_discriminative_bias=False, misalign_bias=False,  gradual_unfreeze=False,
                         hard_validation=False, merge_train=False, train_hyp=False, test_with_prior=False,premise_only=False,
                         cheat=False, tie_encoder_decoder=False, calc_uniform=False, reverse=False, pure_gen=False,
-                        overlap=False, prompts_tuning=False)
+                        overlap=False, prompts_tuning=False, joint_prob=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,

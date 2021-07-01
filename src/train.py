@@ -543,10 +543,10 @@ class Trainer(abc.ABC):
 class GenerativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, possible_labels_ids=None,
                  epsilon=0.0, tokenizer_encoder=None, tokenizer_decoder=None,
-                 create_premises=False, clip=False, gamma=0.0,
+                 create_premises=False, clip=False, gamma=0.0, joint_prob=False,
                  rev=0.0, save_results=None, reduction='mean', hyp_prior_model=None, 
                  mnli_ids_path=None, decoder_only=False, hyp_weight=None, test_with_prior=False, 
-                 device=None, ratios=None, generate_all_labels=False, **kwargs):
+                 device=None, ratios=None, generate_all_labels=False, tokenizer_hyp=None, **kwargs):
         super().__init__(model, None, optimizer, scheduler, device=device, **kwargs)
         # self.evaluator = evaluator
         self.tokenizer_encoder = tokenizer_encoder
@@ -572,6 +572,9 @@ class GenerativeTrainer(Trainer):
         self.test_with_prior = test_with_prior
         self.ratios = ratios
         self.generate_all_labels = generate_all_labels
+        self.joint_prob = joint_prob
+        if tokenizer_hyp is not None:
+            self.tokenizer_hyp = tokenizer_hyp
 
     def _prepare_batch(self, batch):
         if len(batch)==2:
@@ -608,15 +611,17 @@ class GenerativeTrainer(Trainer):
     def _prepare_batch_disc(self, batch):
         input_dict = {}
         labels = None
+        tokenizer = self.tokenizer_hyp if hasattr(self,'tokenizer_hyp') \
+                                       else self.tokenizer_decoder
         if len(batch) == 3:  # P, H, y
             P, H, labels = batch[0:3]
             P, H = list(P), list(H)
-            input_dict = self.tokenizer_decoder.batch_encode_plus([[P[i], H[i]] for i in range(len(P))], padding='longest',
+            input_dict = tokenizer.batch_encode_plus([[P[i], H[i]] for i in range(len(P))], padding='longest',
                                                           return_tensors='pt', truncation=True)
         elif len(batch) == 2:  # Hypotesis only
             H, labels = batch
             H = list(H)
-            input_dict = self.tokenizer_decoder.batch_encode_plus(H, padding='longest', return_tensors='pt', truncation=True)
+            input_dict = tokenizer.batch_encode_plus(H, padding='longest', return_tensors='pt', truncation=True)
 
         batch_encoded = [input_dict[item].to(self.hyp_prior_model.device) for item in ['input_ids', 'attention_mask']]
         batch_encoded += [labels.to(self.hyp_prior_model.device)]
@@ -701,20 +706,24 @@ class GenerativeTrainer(Trainer):
                 # labels = y
         if self.prompts_tuning:
             n_tokens = self.model.get_input_embeddings().n_tokens
-            orig_x = x.clone()
+            x_orig = x.clone()
             x = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), x], 1)
             encoder_attention_mask = torch.cat([torch.full((batch_size,n_tokens), 1).to(self.device), encoder_attention_mask], 1)
+            if decoder_input_ids is not None:
+                decoder_input_ids = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer.eos_token_id).to(self.device),decoder_input_ids], 1)
+            decoder_attention_mask = torch.cat([torch.full((batch_size,n_tokens), 1).to(self.device),decoder_attention_mask], 1)
+                
             labels = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), labels], 1)
+            #labels = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), labels], 1)
 
         model_kwargs = {
             "attention_mask": encoder_attention_mask,
-            "decoder_attention_mask": decoder_attention_mask,
-            "labels": labels
+            "decoder_attention_mask": decoder_attention_mask if decoder_input_ids is not None else None,
+            "labels": labels,
+            "decoder_input_ids": decoder_input_ids,
         }
-        if decoder_input_ids is not None:
-            model_kwargs['decoder_input_ids'] = decoder_input_ids
-        else:
-            model_kwargs.pop('decoder_attention_mask', None)
+        #else:
+        #    model_kwargs.pop('decoder_attention_mask', None)
         self.optimizer.zero_grad()
 
         # prior = -torch.log(torch.tensor(1/self.num_labels))  
@@ -840,8 +849,16 @@ class GenerativeTrainer(Trainer):
 
         ## Needed because that gpt2 handles paddings differently
         mask = (attention_mask == 1)
-        labels = x.clone() * mask + -100 * ~mask
 
+        if self.prompts_tuning:
+            n_tokens = self.model.get_input_embeddings().n_tokens
+            orig_x = x.clone()
+            x = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), x], 1)
+            attention_mask = torch.cat([torch.full((batch_size,n_tokens), 1).to(self.device), attention_mask], 1)
+            premise_mask = torch.cat([torch.full((batch_size,n_tokens), 1).to(self.device), premise_mask], 1)
+        
+        labels = x.clone() * (premise_mask==1) + -100 * ~(premise_mask==1)
+        #import pdb; pdb.set_trace()
         model_kwargs = {
             "input_ids": x,
             "attention_mask": attention_mask,
@@ -1189,15 +1206,16 @@ class GenerativeTrainer(Trainer):
                 inp_x = torch.cat([torch.full((3*batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), inp_x], 1)
                 inp_e_a_m = torch.cat([torch.full((3*batch_size,n_tokens), 1).to(self.device), inp_e_a_m], 1)
                 if decoder_input_ids is not None:
-                    decoder_input_ids = torch.cat([torch.full((3*batch_size,n_tokens), -100).to(self.device), decoder_input_ids], 1)
-                inp_d_a_m = torch.cat([torch.full((3*batch_size,n_tokens), 1).to(self.device), inp_d_a_m], 1)
+                    decoder_input_ids = torch.cat([torch.full((3*batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), decoder_input_ids], 1)
+                    inp_d_a_m = torch.cat([torch.full((3*batch_size,n_tokens), 1).to(self.device), inp_d_a_m], 1)
+
                 labels = torch.cat([torch.full((3*batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), labels], 1)
 
             model_kwargs = {
                 "input_ids":inp_x,
                 "decoder_input_ids": decoder_input_ids,
                 "attention_mask": inp_e_a_m,
-                "decoder_attention_mask": inp_d_a_m,
+                "decoder_attention_mask": inp_d_a_m if decoder_input_ids is not None else None,
                 "labels": labels
             }
 
@@ -1253,7 +1271,17 @@ class GenerativeTrainer(Trainer):
 
             ## Needed because that gpt2 handles paddings differently
             mask = (inp_a_m == 1)
-            labels = inp_x.clone() * mask + -100 * ~mask
+            #labels = inp_x.clone() * mask + -100 * ~mask
+            
+            if self.prompts_tuning:
+                n_tokens = self.model.get_input_embeddings().n_tokens
+                orig_x = inp_x.clone()
+                inp_x = torch.cat([torch.full((3*batch_size,n_tokens), self.tokenizer_encoder.eos_token_id).to(self.device), inp_x], 1)
+                inp_a_m = torch.cat([torch.full((3*batch_size,n_tokens), 1).to(self.device), inp_a_m], 1)
+                #labels = torch.cat([torch.full((3*batch_size,n_tokens), -100).to(self.device), labels], 1)
+                premise_mask_extended = torch.cat([torch.full((3*batch_size,n_tokens), 1).to(self.device), premise_mask_extended], 1)
+
+            labels = inp_x.clone()*(premise_mask_extended==1) + -100 * ~(premise_mask_extended==1)
 
             model_kwargs = {
                 "input_ids":inp_x,
@@ -1411,8 +1439,12 @@ class GenerativeTrainer(Trainer):
 
 class DiscriminativeTrainer(Trainer):
     def __init__(self, model, optimizer, scheduler, max_len=128, num_labels=3,
-                 tokenizer=None, save_results=None, hyp_prior_model=None, mnli_ids_path=None, device=None, save_likelihoods=None, hans=False, **kwargs):
-        super().__init__(model, None, optimizer=optimizer, scheduler=scheduler, device=device, save_likelihoods=save_likelihoods, hans=hans)
+                 tokenizer=None, save_results=None, hyp_prior_model=None, 
+                 mnli_ids_path=None, device=None, save_likelihoods=None, 
+                 hans=False,prompts_tuning=False,**kwargs):
+        super().__init__(model, None, optimizer=optimizer, scheduler=scheduler,
+                         device=device, save_likelihoods=save_likelihoods, 
+                         hans=hans, prompts_tuning=prompts_tuning)
         # self.evaluator = evaluator
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -1440,6 +1472,13 @@ class DiscriminativeTrainer(Trainer):
 
             if self.model.config.architectures is not None and any('T5' in elem for elem in self.model.config.architectures):
                 pass
+        if type(labels[0])==str:
+            #import pdb; pdb.set_trace()
+            labels = list(labels)
+            labels = self.tokenizer.batch_encode_plus(labels, padding='longest',return_tensors='pt', truncation=True, 
+                                                     # add_special_tokens=False
+                                                     ).input_ids
+            labels[labels==0]=-100
         batch_encoded = [input_dict[item].to(self.device) for item in ['input_ids', 'attention_mask']]
         batch_encoded += [labels.to(self.device)]
 
@@ -1464,6 +1503,13 @@ class DiscriminativeTrainer(Trainer):
         # token_type_ids = token_type_ids.to(self.device)
         labels = labels.to(self.device)
 
+        batch_size = x.size(0)
+        if self.prompts_tuning:
+            n_tokens = self.model.get_input_embeddings().n_tokens
+            x = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer.eos_token_id).to(self.device), x], 1)
+            attention_mask = torch.cat([torch.full((batch_size,n_tokens), 1).to(self.device), attention_mask], 1)
+            labels = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer.eos_token_id).to(self.device), labels], 1)
+
         model_kwargs = {
             "attention_mask": attention_mask,
             # "token_type_ids": token_type_ids,
@@ -1475,9 +1521,9 @@ class DiscriminativeTrainer(Trainer):
             model_kwargs['token_type_ids'] = token_type_ids
 
         self.optimizer.zero_grad()
-        # pdb.set_trace()
+       # import pdb;pdb.set_trace()
         outputs = self.model(input_ids=x, **model_kwargs)
-
+        
         loss, logits = outputs[:2]
 
         if self.hyp_prior_model is not None:
@@ -1507,9 +1553,19 @@ class DiscriminativeTrainer(Trainer):
         # validate
         labels = labels.to('cpu')
         pred = torch.argmax(logits, dim=1).to('cpu')
-        # pdb.set_trace()
-
-        num_correct = torch.sum(labels == pred)
+        if len(pred.shape)>1 and pred.size(1)>1:
+            #import pdb;pdb.set_trace()
+            pred = torch.argmax(logits, dim=2)
+            if self.prompts_tuning:
+                pred = pred[:,20:]
+                labels = labels[:,20:]
+            pred[labels==-100]=0
+            pred = self.tokenizer.batch_decode(pred,skip_special_tokens=True)
+            labels[labels==-100]=0
+            labels = self.tokenizer.batch_decode(labels,skip_special_tokens=True)
+            num_correct = torch.tensor(sum((1 if l==p else 0) for l,p in zip(labels,pred)))
+        else:
+            num_correct = torch.sum(labels == pred)
 
         loss_item = loss.item()
 
@@ -1523,6 +1579,12 @@ class DiscriminativeTrainer(Trainer):
         attention_mask = attention_mask.to(self.device)
         # token_type_ids = token_type_ids.to(self.device)
         labels = labels.to(self.device)
+        batch_size = x.size(0)
+        if self.prompts_tuning:
+            n_tokens = self.model.get_input_embeddings().n_tokens
+            x = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer.eos_token_id).to(self.device), x], 1)
+            attention_mask = torch.cat([torch.full((batch_size,n_tokens), 1).to(self.device), attention_mask], 1)
+            labels = torch.cat([torch.full((batch_size,n_tokens), self.tokenizer.eos_token_id).to(self.device), labels], 1)
 
         model_kwargs = {
             "attention_mask": attention_mask,
@@ -1584,7 +1646,20 @@ class DiscriminativeTrainer(Trainer):
             # for l in true_labels_loss:
             self.likelihoods.append(labels == pred)
 
-        num_correct = torch.sum(labels == pred)
+        if len(pred.shape)>1 and pred.size(1)>1:
+            #import pdb;pdb.set_trace()
+            pred = torch.argmax(logits, dim=2)
+            if self.prompts_tuning:
+                pred = pred[:,20:]
+                labels = labels[:,20:]
+            pred[labels==-100]=0
+            pred = self.tokenizer.batch_decode(pred,skip_special_tokens=True)
+            labels[labels==-100]=0
+            labels = self.tokenizer.batch_decode(labels,skip_special_tokens=True)
+            num_correct = torch.tensor(sum((1 if l==p else 0) for l,p in zip(labels,pred)))
+        else:
+            num_correct = torch.sum(labels == pred)
+        #num_correct = torch.sum(labels == pred)
 
         loss_item = loss.item()
 

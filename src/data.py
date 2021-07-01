@@ -32,8 +32,8 @@ class DiscriminativeDataset(Dataset):
                  inject_bias=0, bias_ids=None, bias_ratio=0.5, bias_location='start',
                  non_discriminative_bias=False, misalign_bias=False, seed=42, threshold=0.0, 
                  attribution_map=None, move_to_hypothesis=False, filt_method='true',
-                 attribution_tokenizer=None, possible_labels=None, rev=False, pure_gen=False, hypothesis_only=False, premise_only=False, 
-                 overlap=False, prompts=None, t5_disc=False):
+                 attribution_tokenizer=None, possible_labels=None, rev=False, pure_gen=False, 
+                 hypothesis_only=False, premise_only=False, overlap=False, prompts=None, t5_disc=False):
         if bias_ids is None:
             bias_ids = [2870, 2874, 2876]
         super().__init__()
@@ -195,6 +195,9 @@ class DiscriminativeDataset(Dataset):
                     bias_str = self.tokenizer.decode(self.bias_ids[bias_idx]).replace(' ', '')
                     hypothesis_splited = hypothesis_splited[0:idx] + [bias_str] + hypothesis_splited[idx:]
                     hypothesis = ' '.join(hypothesis_splited)
+        
+        if self.t5_disc:
+            lbl = self.possible_labels[lbl].strip()
         if self.rev:
             return hypothesis, premise, lbl
         elif self.pure_gen:
