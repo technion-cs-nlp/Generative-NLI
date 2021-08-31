@@ -48,7 +48,7 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
                    label=None, threshold=0.0, attribution_map=None, move_to_hypothesis=False, filt_method='true', train_hyp=False, 
                    attribution_tokenizer=None, premise_only=False, cheat=False, calc_uniform=False, pure_gen=False, 
                    overlap=False, prompts_tuning=False, embeddings_path=None, joint_prob=False, tokenizer_hyp=None, 
-                   bias_model_name=None,):
+                   bias_model_name=None,save_each_epoch=False):
     if not seed:
         seed = random.randint(0, 2 ** 31)
     torch.manual_seed(seed)
@@ -167,41 +167,59 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     dataloader_args = {}
     if tokenizer_hyp is not None:
         tokenizer_hyp = AutoTokenizer.from_pretrained(tokenizer_hyp)
-    train_args = {'reduction': reduction, 'ratios':ratios, 'joint_prob': joint_prob}
+    train_args = {'reduction': reduction, 'ratios':ratios, 'joint_prob': joint_prob, 'save_each_epoch': save_each_epoch}
     train_args['tokenizer_hyp'] = tokenizer_hyp
 
     hyp = None
     optimizer_grouped_parameters = []
     if hyp_only_model is not None:
-        if torch.cuda.device_count() > 1 and model_type != 't5':
-            hyp_device = torch.device('cuda:1')
-        else:
-            hyp_device = device
-        if os.path.isdir(hyp_only_model):
-            hyp = get_model(model='discriminative',
-                            model_name= bias_model_name if bias_model_name is not None
-                            else (decoder_model_name if decoder_model_name is not None else model_name),
-                            model_path=hyp_only_model, num_labels=num_labels)
-            hyp = hyp.to(hyp_device)
-            if train_hyp:
+        if not prompts_tuning or bias_model_name is not None:
+            if torch.cuda.device_count() > 1 and model_type != 't5':
+                hyp_device = torch.device('cuda:1')
+            else:
+                hyp_device = device
+            if os.path.isdir(hyp_only_model):
+                hyp = get_model(model='discriminative',
+                                model_name= bias_model_name if bias_model_name is not None
+                                else (decoder_model_name if decoder_model_name is not None else model_name),
+                                model_path=hyp_only_model, num_labels=num_labels)
+                hyp.to(hyp_device)
+                if train_hyp:
+                    optimizer_grouped_parameters = [
+                        {
+                            "params": hyp.parameters()
+                        }
+                    ]
+                    hyp.requires_grad_ = True
+                else: 
+                    hyp.requires_grad_ = False
+            else:
+                hyp = get_model(model='discriminative',
+                                model_name=decoder_model_name if decoder_model_name is not None else model_name,
+                                model_path=None, num_labels=num_labels)
+                hyp.to(hyp_device)
                 optimizer_grouped_parameters = [
                     {
                         "params": hyp.parameters()
                     }
                 ]
-                hyp.requires_grad_ = True
-            else: 
-                hyp.requires_grad_ = False
+
         else:
-            hyp = get_model(model='discriminative',
-                            model_name=decoder_model_name if decoder_model_name is not None else model_name,
-                            model_path=None, num_labels=num_labels)
-            hyp = hyp.to(hyp_device)
-            optimizer_grouped_parameters = [
-                {
-                    "params": hyp.parameters()
-                }
-            ]
+            from src.soft_embedding import SoftEmbedding
+            n_tokens = 20
+            initialize_from_vocab = True
+            s_wte = torch.load(hyp_only_model, map_location=torch.device('cpu'))
+            if train_hyp:
+                optimizer_grouped_parameters = [
+                        {
+                            "params": s_wte.parameters()
+                        }
+                    ]
+                s_wte.requires_grad_ = True
+            else:
+                s_wte.requires_grad_ = False
+
+            hyp = s_wte.to(device)
 
         train_args['hyp_prior_model'] = hyp
         train_args['test_with_prior'] = test_with_prior
@@ -293,19 +311,15 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
         model.requires_grad_ = False
         for param in model.parameters():
             param.requires_grad = False
-        model.set_input_embeddings(s_wte)
-        #import pdb; pdb.set_trace()
+
+        if hasattr(model, 'encoder'):
+            model.get_encoder().set_input_embeddings(s_wte)
+        else:
+            model.set_input_embeddings(s_wte)
         train_args['prompts_tuning'] = True
 
-    if torch.cuda.device_count()>1 and hyp is None:
+    if torch.cuda.device_count()>1:
         if hasattr(model, 'parallelize'):
-            #import pdb; pdb.set_trace()
-#            n_devices = torch.cuda.device_count()
-#            num_layers = model.config.num_layers if hasattr(model.config,'num_layers') else model.config.n_layer
-#            k = num_layers//n_devices
-#            device_map = {i:list(range(i*k,(i+1)*k)) for i in range(n_devices)}
-            #device_map = {0:[0,1,2],1:[3,4,5,6,7,8,9],2:[10,11,12,13,14,15,16],3:[17,18,19,20,21,22,23]}
-            #model.parallelize(device_map)
             model.parallelize()
         elif hasattr(model, 'encoder') and hasattr(model, 'decoder'):
             pass
@@ -360,11 +374,13 @@ def run_experiment(run_name, out_dir='./results', data_dir_prefix='./data/snli_1
     
     if do_test:
         print('_'*50)
-        test_model(run_name, out_dir+"_test", data_dir_prefix, model_name, checkpoints+"_model", model_type, decoder_model_name, seed, None,
+        test_model(run_name, out_dir+"_test", data_dir_prefix, model_name, (checkpoints+"_model") if not prompts_tuning else model_path, model_type, decoder_model_name, seed, None,
                     bs_test, batches, None, 0, 0, hypothesis_only, False, False, label, attribution_map,
-                    move_to_hypothesis, hyp_only_model, threshold, reduction, filt_method, attribution_tokenizer=attribution_tokenizer, test_with_prior=test_with_prior,
+                    move_to_hypothesis, hyp_only_model if not prompts_tuning else None, threshold, reduction, filt_method, attribution_tokenizer=attribution_tokenizer, test_with_prior=test_with_prior,
                     premise_only=premise_only, calc_uniform=calc_uniform, reverse=reverse, pure_gen=pure_gen,
-                    inject_bias=inject_bias, bias_ids=bias_ids, bias_ratio=bias_ratio, bias_location=bias_location, non_discriminative_bias=non_discriminative_bias,)
+                    inject_bias=inject_bias, bias_ids=bias_ids, bias_ratio=bias_ratio, bias_location=bias_location, 
+                    non_discriminative_bias=non_discriminative_bias, 
+                    embeddings_path=f'{checkpoints}_model_embeddings.torch' if prompts_tuning else None)
 
 
 
@@ -492,6 +508,8 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     dataset = None
     trainer_type = None
     data_args = {"move_to_hypothesis":move_to_hypothesis, 'possible_labels':all_labels_text, 'rev':reverse, 'pure_gen':pure_gen}
+    if model_type.startswith('disc') and 't5' in model_name:
+        data_args['t5_disc'] = True
     dataloader_args = {}
     train_args = {'reduction':reduction, 'ratios':ratios, 'save_likelihoods':save_likelihoods}
     if 'hans_evalset' in data_dir_prefix:
@@ -584,7 +602,10 @@ def test_model(run_name, out_dir='./results_test', data_dir_prefix='./data/snli_
     if prompts_tuning:
         from src.soft_embedding import SoftEmbedding
         s_wte = torch.load(embeddings_path, map_location=torch.device('cpu'))
-        model.set_input_embeddings(s_wte)
+        if hasattr(model, 'encoder'):
+            model.get_encoder().set_input_embeddings(s_wte)
+        else:
+            model.set_input_embeddings(s_wte)
         train_args['prompts_tuning'] = True
 
     if torch.cuda.device_count()>1 and hyp is None:
@@ -900,12 +921,13 @@ def parse_cli():
     sp_exp.add_argument('--pure-gen', '-pg', dest='pure_gen', action='store_true')
     sp_exp.add_argument('--prompts-tuning', '-pt', dest='prompts_tuning', action='store_true')
     sp_exp.add_argument('--joint-prob', '-jp', dest='joint_prob', action='store_true')
+    sp_exp.add_argument('--save-each-epoch', '-see', dest='save_each_epoch', action='store_true')
 
     sp_exp.set_defaults(tie_embeddings=False, hypothesis_only=False,
                         generate_hypothesis=False, non_discriminative_bias=False, misalign_bias=False,  gradual_unfreeze=False,
                         hard_validation=False, merge_train=False, train_hyp=False, test_with_prior=False,premise_only=False,
                         cheat=False, tie_encoder_decoder=False, calc_uniform=False, reverse=False, pure_gen=False,
-                        overlap=False, prompts_tuning=False, joint_prob=False)
+                        overlap=False, prompts_tuning=False, joint_prob=False, save_each_epoch=False)
 
     # # Model
     sp_exp.add_argument('--model-path', type=str,

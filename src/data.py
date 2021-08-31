@@ -151,14 +151,15 @@ class DiscriminativeDataset(Dataset):
                     else:
                         threshold = 0.0
                         filt = self.attribution_map[index][lbl]
-                else: # self.filt_method == 'none'
+                elif self.filt_method == 'all': # 
                     premises, hypotheses = [], []
                     for filt in self.attribution_map[index]:
                         P, H = self.filter_premise(premise, hypothesis, filt, threshold)
                         premises.append(P)
                         hypotheses.append(H)
                     return premises, hypotheses, lbl
-
+                else: #self.filt_method == 'none'
+                    return premise, hypothesis, lbl, self.attribution_map[index]
                 
                 premise, hypothesis = self.filter_premise(premise, hypothesis, filt, threshold)
 
@@ -197,7 +198,9 @@ class DiscriminativeDataset(Dataset):
                     hypothesis = ' '.join(hypothesis_splited)
         
         if self.t5_disc:
+            label_names = {'contradiction':'no','entailment':'yes', 'neutral':'maybe'}
             lbl = self.possible_labels[lbl].strip()
+            lbl = label_names[lbl]
         if self.rev:
             return hypothesis, premise, lbl
         elif self.pure_gen:
