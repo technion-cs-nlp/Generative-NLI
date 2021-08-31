@@ -913,10 +913,10 @@ class GenerativeTrainer(Trainer):
         model_kwargs = {
             "input_ids": x,
             "attention_mask": attention_mask,
-            "token_type_ids": type_ids,
             "labels": labels,
         }
-        
+        #if type_ids is not None:
+        #    model_kwargs['token_type_ids'] = type_ids
         self.optimizer.zero_grad()
 
         # prior = -torch.log(torch.tensor(1/self.num_labels))
@@ -1163,7 +1163,8 @@ class GenerativeTrainer(Trainer):
     def calc_disc_loss(self, batch):
         batch_hyp_only = batch[-2:]  # H, y
         if self.model.config.architectures is not None and any('T5' in elem for elem in self.model.config.architectures):# and not hasattr(self.hyp_prior_model,'config'):
-            batch_hyp_only = (batch_hyp_only[0],[self.tokenizer_encoder.decode(self.labels[l])[1:-1] for l in batch_hyp_only[-1]])
+            label_names = {'contradiction':'no','entailment':'yes', 'neutral':'maybe'}
+            batch_hyp_only = (batch_hyp_only[0],[label_names[self.tokenizer_encoder.decode(self.labels[l])[1:-1]] for l in batch_hyp_only[-1]])
         y_hyp, attention_mask_hyp, labels_hyp, token_type_ids_hyp = self._prepare_batch_disc(batch_hyp_only)
 
         #y_hyp = y_hyp.to(self.hyp_prior_model.device)
@@ -1360,8 +1361,8 @@ class GenerativeTrainer(Trainer):
                 "attention_mask": inp_a_m,
                 "labels": labels,
             }
-            if type_ids is not None:
-                model_kwargs["token_type_ids"] = inp_t_t
+            #if type_ids is not None:
+            #    model_kwargs["token_type_ids"] = inp_t_t
             
             attention = premise_mask_extended
         # import pdb; pdb.set_trace()

@@ -5,9 +5,11 @@ import torch, sys, tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-model_path = "checkpoints/exp_bart_b_hyp_mnli_model"
+#model_path = "checkpoints/exp_bart_b_hyp_mnli_model"
+model_path = "checkpoints/overlap_200_hyp_model"
+#model_name = "facebook/bart-base"
 model_name = "facebook/bart-base"
-data_path = "data/mnli/cl_multinli_dev_mismatched"
+data_path = "data/mnli/hans/train/cl_multinli_dev_mismatched"
 source_path = f"{data_path}_source_file"
 lbl_path = f"{data_path}_lbl_file"
 hard_source_path = f"{data_path}_hard_source_file"

@@ -82,13 +82,17 @@ def get_model(model='encode-decode', model_name='bert-base-uncased', tokenizer=N
         res_model = T5ForConditionalGeneration.from_pretrained(model_name)
 
     elif model == 'decoder-only':
-        from transformers import AutoModelForCausalLM
-        args = {}
-        if 'gpt' not in model_name:
-            args['is_decoder']=True
-        res_model = AutoModelForCausalLM.from_pretrained(model_name, **args)
-        if 'gpt' in model_name:
-            res_model.config.pad_token_id = tokenizer.pad_token_id
+        if 'bert' in model_name:
+            from transformers import BertGenerationDecoder
+            res_model = BertGenerationDecoder.from_pretrained(model_name, add_cross_attention=False, is_decoder=True, bos_token_id=101, eos_token_id=102)
+        else:
+            from transformers import AutoModelForCausalLM
+            args = {}
+            if 'gpt' not in model_name:
+                args['is_decoder']=True
+            res_model = AutoModelForCausalLM.from_pretrained(model_name, **args)
+            if 'gpt' in model_name:
+                res_model.config.pad_token_id = tokenizer.pad_token_id
 
     elif model == 'shared':
         if model_path is None:
