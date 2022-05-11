@@ -1,4 +1,4 @@
-# Ubart
+# Generative-NLI
 
 Use `environment.yml` file with conda to install neccecery modules:
 
